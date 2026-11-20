@@ -1,0 +1,21 @@
+name: 更新台股收盤價
+
+on:
+  schedule:
+    # UTC 08:17 = 台灣時間 16:17，週一到週五
+    - cron: "17 8 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: node update-quotes.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
