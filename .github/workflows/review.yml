@@ -35,6 +35,10 @@ jobs:
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
+      - if: ${{ inputs.list_models }}
+        run: node probe.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: node review-month.mjs
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
