@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "模型 id（留空＝預設 gemini-2.5-flash，不存在時自動換最新的 flash）"
+        description: "模型 id（留空＝自動用最新的 gemini flash）"
         required: false
       month:
         description: "要分析的月份（YYYY-MM），留空＝上個月"

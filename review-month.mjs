@@ -6,7 +6,7 @@ import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldPath } from "firebase-admin/firestore";
 
 const API = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = ""; // 空白＝自動用清單裡最新的 gemini-x.y-flash
 const KEY_HEADERS = () => ({ "x-goog-api-key": process.env.GEMINI_API_KEY, "content-type": "application/json" });
 
 const SAVE_GOAL = 10000; // 和網頁的「每月先存」目標一致
@@ -109,11 +109,13 @@ export async function callGemini(model, summary) {
 // 指定的模型不存在（例如舊版被下架）時，自動改用清單裡最新的 flash 模型
 export async function pickModel(wanted) {
   const list = await availableModels();
-  if (list.some(m => m.id === wanted)) return wanted;
-  const flash = list.map(m => m.id).filter(id => /^gemini-[\d.]+-flash$/.test(id)).sort().reverse();
+  if (wanted && list.some(m => m.id === wanted)) return wanted;
+  const ver = id => id.match(/^gemini-([\d.]+)-flash$/)[1].split(".").map(Number);
+  const flash = list.map(m => m.id).filter(id => /^gemini-[\d.]+-flash$/.test(id))
+    .sort((a, b) => { const x = ver(a), y = ver(b); return (y[0] - x[0]) || ((y[1] || 0) - (x[1] || 0)); });
   const alt = flash[0] || (list.find(m => /flash/.test(m.id)) || {}).id;
   if (!alt) throw new Error(`找不到模型 ${wanted}，也沒有可替代的 flash 模型`);
-  console.log(`找不到模型 ${wanted}，改用 ${alt}`);
+  console.log(wanted ? `找不到模型 ${wanted}，改用 ${alt}` : `自動選用最新的 flash 模型：${alt}`);
   return alt;
 }
 
