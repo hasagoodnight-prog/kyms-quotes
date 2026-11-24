@@ -1495,7 +1495,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, FieldPath, deleteField }
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, getDoc, setDoc, updateDoc, onSnapshot, FieldPath, deleteField }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -1509,7 +1509,10 @@ const firebaseConfig = {
 const authApp = initializeApp(firebaseConfig, "auth-gate");
 const gateAuth = getAuth(authApp);
 await setPersistence(gateAuth, browserLocalPersistence);
-const fsDb = getFirestore(authApp);
+/* 離線快取：資料存一份在這台裝置（IndexedDB），沒網路也能看、能記帳，連線後自動同步；多分頁共用 */
+let fsDb;
+try{ fsDb = initializeFirestore(authApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+catch(e){ fsDb = getFirestore(authApp); }
 
 /* 記帳資料整包存成單一文件 jizhangState/{uid}，每位登入帳號各自一份，不碰儀表板既有的 collection */
 window.cloudSync = {
@@ -1594,6 +1597,9 @@ onAuthStateChanged(gateAuth, (user)=>{
   }
 });
 
+</script>
+<script>
+/* 離線用的 service worker：獨立註冊，Firebase 載入失敗（例如離線）也會生效 */
 if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
 }
@@ -2433,6 +2439,8 @@ let cloudOn = false;
    BASE＝最後一次和雲端一致的內容。存檔時跟 BASE 比，只送出差異；
    收到雲端新內容時，先算出本機還沒送出的差異，換成雲端版本後再把差異疊回去。 */
 let BASE = null, syncQ = Promise.resolve(), syncRetry = 0;
+window.addEventListener("online", () => renderStatus());
+window.addEventListener("offline", () => renderStatus());
 const jclone = o => JSON.parse(JSON.stringify(o == null ? null : o));
 const jeq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function setBase(){ BASE = { settings: jclone(S.settings), months: jclone(S.months), quotes: jclone(S.quotes) }; }
@@ -2471,8 +2479,9 @@ function pushCloud(){
   syncQ = syncQ.then(async () => {
     const ops = diffOps();
     if(!ops.length) return;
+    S.syncPending = (S.syncPending || 0) + 1; renderStatus();
     try{
-      await window.cloudSync.patch(ops);
+      await window.cloudSync.patch(ops);   // 離線時會等到連上網才完成（資料已先存在這台裝置）
       applyOps(BASE, ops);
       syncRetry = 0;
       if(S.cloudErr){ S.cloudErr = false; renderStatus(); }
@@ -2483,6 +2492,7 @@ function pushCloud(){
       clearTimeout(syncRetry);
       syncRetry = setTimeout(() => { syncRetry = 0; pushCloud(); }, 15000);
     }
+    S.syncPending--; renderStatus();
   });
 }
 function onRemote(d){
@@ -2742,6 +2752,8 @@ function renderStatus(){
   if(S.statusErr){ cls = "err"; msg = S.statusErr; }
   else if(S.cloudErr){ cls = "err"; msg = "雲端同步失敗，先存在這台裝置"; }
   else if(S.mode === "loading"){ cls = "busy"; msg = "連線中…"; }
+  else if(S.mode === "local" && cloudOn && !navigator.onLine){ cls = "local"; msg = S.syncPending ? "離線：已存在這台裝置，連上網自動同步" : "離線中，可以照常記帳"; }
+  else if(S.mode === "local" && cloudOn && S.syncPending){ cls = "ok busy"; msg = "同步中…"; }
   else if(S.mode === "local" && cloudOn){ cls = "ok"; msg = "已同步到雲端"; }
   else if(S.mode === "local"){ cls = "local"; msg = "只存在這個瀏覽器"; }
   else if(!S.ready){ cls = "ok busy"; msg = "讀取中…"; }
