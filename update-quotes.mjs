@@ -3,7 +3,7 @@
 // MODE=realtime（手動啟動）：用證交所即時行情（盤中是最新成交價），抓不到的代號改用收盤價。
 // 手動填的價格，日期不比新資料舊就保留。
 import { initializeApp, cert } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldPath } from "firebase-admin/firestore";
 
 const TWSE = "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL";
 const TPEX = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes";
@@ -86,6 +86,19 @@ async function getJson(url) {
   return res.json();
 }
 
+// 用持股（股數 × 價格）算浮動盈虧，存成那個月的快照（同月後面的執行會覆蓋＝月底值）
+export function plSnapshot(hold, px) {
+  let mv = 0, cost = 0, d = "";
+  for (const h of hold || []) {
+    const s = String((h && h.sym) || "").toUpperCase(), q = px[s], sh = Number(h && h.sh), c = Number(h && h.cost);
+    if (!q || !(q.p > 0) || !(sh > 0)) continue;
+    mv += sh * q.p; cost += sh * (c > 0 ? c : 0);
+    if (String(q.d || "") > d) d = String(q.d);
+  }
+  if (!d) return null;
+  return { mk: d.slice(0, 7), v: { pl: Math.round(mv - cost), mv: Math.round(mv), cost: Math.round(cost), d } };
+}
+
 // 把收盤資料合併進某個帳號原本的 quotes；沒變就回傳 null
 export function merge(oldQuotes, syms, map) {
   const q = { px: { ...((oldQuotes && oldQuotes.px) || {}) }, at: String((oldQuotes && oldQuotes.at) || "") };
@@ -137,7 +150,13 @@ async function main() {
     const src = realtime ? Object.assign({}, map, rt) : map;
     const q = merge(data.quotes, syms, src);
     const miss = syms.filter(s => !src[s]);
-    if (q) await doc.ref.update({ quotes: q });
+    const snapQ = plSnapshot(hold, (q || data.quotes || {}).px || {});
+    const oldSnap = snapQ && data.plh && data.plh[snapQ.mk];
+    const snapChanged = snapQ && !(oldSnap && oldSnap.pl === snapQ.v.pl && oldSnap.mv === snapQ.v.mv && oldSnap.d === snapQ.v.d);
+    if (q && snapChanged) await doc.ref.update("quotes", q, new FieldPath("plh", snapQ.mk), snapQ.v);
+    else if (q) await doc.ref.update({ quotes: q });
+    else if (snapChanged) await doc.ref.update(new FieldPath("plh", snapQ.mk), snapQ.v);
+    if (snapQ) console.log(`  ${snapQ.mk} 浮動盈虧快照：${snapQ.v.pl}`);
     console.log(`帳號 ${doc.id.slice(0, 6)}…：持股 ${syms.length} 檔，${q ? "已更新" : "沒有變動"}${miss.length ? "，找不到：" + miss.join(",") : ""}`);
   }
 }

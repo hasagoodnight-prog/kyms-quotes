@@ -543,6 +543,9 @@ body.priv .hin input[data-hf=sh],body.priv .hin input[data-hf=cost],body.priv #b
 .legend span{font-size:12.5px;color:var(--ink-2)}
 .legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:7px;vertical-align:-1px}
 .legend i.line{height:0;border-top:2px solid var(--gold);border-radius:0;vertical-align:3px}
+.legend i.line.dash{border-top-style:dashed}
+.g-pl{fill:none;stroke:var(--c5);stroke-width:2;stroke-dasharray:5 4;stroke-linejoin:round;stroke-linecap:round}
+.g-pdot{fill:var(--c5);stroke:var(--panel);stroke-width:2}
 .chartwrap{position:relative;padding:6px 8px 4px}
 .chartwrap svg{display:block;width:100%;height:auto;touch-action:pan-y;cursor:pointer}
 .tip{position:absolute;pointer-events:none;opacity:0;transform:translate(-50%,0);transition:opacity .12s;background:var(--tip-bg);border:1px solid var(--rule);border-radius:3px;padding:9px 11px;min-width:176px;z-index:3;box-shadow:var(--shadow)}
@@ -1425,6 +1428,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
           <span><i style="background:var(--exp)"></i>支出</span>
           <span><i class="line"></i>結餘（收入 − 支出）</span>
           <span><i class="line" style="border-top-color:var(--good)"></i>累積資產（右軸）</span>
+          <span><i class="line dash" style="border-top-color:var(--c5)"></i>浮動盈虧</span>
         </div>
         <div class="chartwrap" id="trendWrap">
           <svg id="trend" role="img" aria-label="每月收入、支出與結餘"></svg>
@@ -2116,6 +2120,15 @@ let SR = null, MC = null, DL = null;   // 設定文件、月份集合、下載
 let QR = null;                         // 股價文件（排程每天收盤後寫入，也可以手動改）
 S.quotes = { px: {}, at: "" };
 S.reviews = {};
+S.plh = {};   // 每月浮動盈虧快照（股價排程寫入）：{ "2026-11": { pl, mv, cost, d } }
+function cleanPlh(x){
+  const out = {};
+  if(x && typeof x === "object") for(const mk in x){
+    const q = x[mk], pl = Number(q && q.pl);
+    if(MRE.test(mk) && isFinite(pl)) out[mk] = { pl: Math.round(pl), mv: Math.round(Number(q.mv) || 0), cost: Math.round(Number(q.cost) || 0), d: String(q.d || "").slice(0, 10) };
+  }
+  return out;
+}
 let RV = null;
 function cleanReviews(x){
   const out = {}, src = x && x.m && typeof x.m === "object" ? x.m : {};
@@ -2407,6 +2420,7 @@ window.addEventListener("cloud-user-ready", async () => {
       S.months = cleanMonths(remote.months);
       S.quotes = cleanQuotes(remote.quotes);
       S.reviews = cleanReviews(remote.reviews);
+      S.plh = cleanPlh(remote.plh);
       cloudOn = true;
     } else {
       const loc = readLocal();
@@ -3837,15 +3851,21 @@ function renderTrend(forceGrow){
     const mk = addM(end, -k), r = summarize(mk);
     data.push({ mk, inc: r.inc, exp: r.exp, sav: r.sav, net: r.inc - r.exp, n: r.list.length });
   }
+  /* 浮動盈虧：這個月用現在的股價即時算，過去的月份用排程存下的月底快照 */
+  const hsNow = (S.settings.hold || []).length ? holdStats() : null;
+  data.forEach(d => {
+    d.pl = d.mk === cm && hsNow && hsNow.priced ? Math.round(hsNow.pl) : S.plh[d.mk] ? S.plh[d.mk].pl : null;
+  });
   let run = assetThrough(addM(data[0].mk, -1)).tot;
   data.forEach(d => { run += d.net; d.ast = run; });
   const anyData = data.some(d => d.n) || (S.settings.base || 0) !== 0 || (S.settings.baseInv || 0) !== 0;
   const gk = n + "|" + end;
   const grow = anim && S.ready && (forceGrow || A.intro || (TRC.gk !== null && TRC.gk !== gk));
-  const tsig = [W, n, end, S.view, S.ready, data.map(d => d.inc + ":" + d.exp + ":" + d.n + ":" + d.ast).join(",")].join("|");
+  const tsig = [W, n, end, S.view, S.ready, PRIV, data.map(d => d.inc + ":" + d.exp + ":" + d.n + ":" + d.ast + ":" + d.pl).join(",")].join("|");
   if(!grow && tsig === TRC.sig) return;
-  const hi = Math.max(1, ...data.map(d => Math.max(d.inc, d.exp, d.net)));
-  const lo = Math.min(0, ...data.map(d => d.net));
+  const plv = d => PRIV || d.pl == null ? 0 : d.pl;   // 隱藏金額時，浮動盈虧不畫也不影響刻度
+  const hi = Math.max(1, ...data.map(d => Math.max(d.inc, d.exp, d.net, plv(d))));
+  const lo = Math.min(0, ...data.map(d => Math.min(d.net, plv(d))));
   const top = niceMax(hi * 1.05), bot = lo < 0 ? -niceMax(-lo * 1.05) : 0;
   const pd = { l: W < 420 ? 46 : 56, r: anyData ? (W < 420 ? 42 : 52) : 10, t: 12, b: 36 };
   const pw = W - pd.l - pd.r, ph = H - pd.t - pd.b, slot = pw / n;
@@ -3899,6 +3919,19 @@ function renderTrend(forceGrow){
   }
   if(path) o.push('<path class="g-net" d="' + path + '"/><path class="g-flow' + (grow ? " fade" : "") + '" d="' + path + '"/>');
   o.push(dots.join(""));
+  /* 浮動盈虧（左軸，虛線）：只畫有資料的月份；隱藏金額時不畫 */
+  if(!PRIV){
+    let pp = "", pon = false;
+    const pdots = [];
+    data.forEach((d, i) => {
+      if(d.pl == null){ pon = false; return; }
+      const x = X(i).toFixed(1), y = Y(d.pl).toFixed(1);
+      pp += (pon ? "L" : "M") + x + " " + y + " ";
+      pon = true;
+      pdots.push('<circle class="g-pdot" cx="' + x + '" cy="' + y + '" r="3.5"/>');
+    });
+    if(pp) o.push('<path class="g-pl" d="' + pp + '"/>' + pdots.join(""));
+  }
   const every = slot < 34 ? 2 : 1;
   data.forEach((d, i) => {
     const isSel = d.mk === S.view, jan = mNum(d.mk) === 1;
@@ -3994,6 +4027,7 @@ function bindTrend(){
         .map(([k, v, c]) => '<div class="tr"><span' + (c ? ' style="color:' + c + '"' : "") + ">" + k + "</span><b>" + (PRIV && k === "月底累積資產" ? "••••••" : money(v)) + "</b></div>").join("");
       if(d.inc > 0) html += '<div class="tr"><span>儲蓄率</span><b>' + Math.round(d.net / d.inc * 100) + "%</b></div>";
     }
+    if(d.pl != null) html += '<div class="tr"><span style="color:var(--c5)">' + (d.mk === curMk() ? "浮動盈虧（現在）" : "月底浮動盈虧") + "</span><b>" + (PRIV ? "••••••" : sgn(d.pl)) + "</b></div>";
     tip.innerHTML = html;
     tip.classList.add("on");
     const tw = tip.offsetWidth;
