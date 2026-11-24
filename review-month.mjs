@@ -88,22 +88,40 @@ async function availableModels() {
   return out;
 }
 
-export async function callGemini(model, summary) {
+export async function callGeminiOnce(model, summary, thinking) {
+  const generationConfig = { responseMimeType: "application/json", maxOutputTokens: 8192 };
+  if (thinking) generationConfig.thinkingConfig = { thinkingLevel: thinking };
   const res = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: KEY_HEADERS(),
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: SYSTEM }] },
       contents: [{ role: "user", parts: [{ text: "這是我這個月的記帳摘要，請寫月報分析：\n" + JSON.stringify(summary) }] }],
-      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 8192 },
+      generationConfig,
     }),
   });
   const body = await res.text();
   if (!res.ok) { const e = new Error(`Gemini 回應 ${res.status}：${body.slice(0, 300)}`); e.status = res.status; throw e; }
   const d = JSON.parse(body), c = d.candidates && d.candidates[0];
-  const txt = c && c.content && (c.content.parts || []).map(p => p.text || "").join("");
+  const txt = c && c.content && (c.content.parts || []).filter(p => !p.thought).map(p => p.text || "").join("");
   if (!txt) throw new Error("Gemini 沒有回傳內容：" + body.slice(0, 300));
   return cleanReview(txt);
+}
+
+// 思考等級設低（月報只是整理摘要，不需要想很久，也避免超過 5 分鐘逾時）；
+// 模型不支援這個設定（400）就拿掉再試；逾時或暫時錯誤（5xx/429）再試一次
+export async function callGemini(model, summary) {
+  let thinking = "low";
+  for (let i = 0; i < 3; i++) {
+    try { return await callGeminiOnce(model, summary, thinking); }
+    catch (e) {
+      if (e.status === 400 && thinking && /thinking/i.test(e.message)) { console.log("這個模型不支援 thinkingLevel，改用預設"); thinking = null; continue; }
+      const retry = !e.status || e.status === 429 || e.status >= 500;
+      if (!retry || i === 2) throw e;
+      console.log("暫時失敗，30 秒後重試：", e.message.slice(0, 120));
+      await new Promise(r => setTimeout(r, 30000));
+    }
+  }
 }
 
 // 指定的模型不存在（例如舊版被下架）時，自動改用清單裡最新的 flash 模型
