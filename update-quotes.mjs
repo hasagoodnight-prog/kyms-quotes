@@ -188,6 +188,83 @@ export function backfillPlh(data, series, curMk) {
   return out;
 }
 
+// ===== 股息自動入帳（資料來源：開源 FinMind 的台股股利資料） =====
+const FINMIND = "https://api.finmindtrade.com/api/v4/data";
+const NHI_RATE = 0.0211, NHI_MIN = 20000;   // 二代健保補充保費：單筆股利 2 萬以上扣 2.11%
+const DIV_BACK_DAYS = 60;                    // 付款日在最近 60 天內的才自動補記（更早的不動，避免和你以前手記的重複）
+
+export function parseDividends(rows) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const exd = String(r.CashExDividendTradingDate || ""), pay = String(r.CashDividendPaymentDate || "");
+    const cps = Math.round(((Number(r.CashEarningsDistribution) || 0) + (Number(r.CashStatutorySurplus) || 0)) * 1e6) / 1e6;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(exd) && cps > 0) out.push({ exd, pay: /^\d{4}-\d{2}-\d{2}$/.test(pay) ? pay : "", cps });
+  }
+  return out;
+}
+
+async function fetchDividends(sym, since) {
+  const d = await getJson(`${FINMIND}?dataset=TaiwanStockDividend&data_id=${encodeURIComponent(sym)}&start_date=${since}`);
+  return parseDividends(d && d.data);
+}
+
+// 除息日前一天收盤時持有的股數：有代號和股數的買進紀錄照紀錄算；目前持股比紀錄多的部分當作一直都有
+export function sharesBefore(data, sym, date) {
+  const hold = ((data.settings && data.settings.hold) || []).find(h => String(h.sym || "").toUpperCase() === sym);
+  let rec = 0, recBefore = 0;
+  for (const tx of Object.values(data.months || {})) for (const e of Object.values(tx || {})) {
+    if (!e || e.t !== "s" || String(e.sym || "").toUpperCase() !== sym || !(Number(e.sh) > 0)) continue;
+    rec += Number(e.sh);
+    if (String(e.d) < date) recBefore += Number(e.sh);
+  }
+  const pre = Math.max(0, (Number(hold && hold.sh) || 0) - rec);
+  return pre + recBefore;
+}
+
+export function divAmount(shares, cps) {
+  const gross = Math.round(shares * cps);
+  const nhi = gross >= NHI_MIN ? Math.round(gross * NHI_RATE) : 0;
+  return { gross, nhi, net: gross - nhi };
+}
+
+const fmt = n => Math.round(n).toLocaleString("en-US");
+const divId = (sym, exd) => ("dv" + sym + exd).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 40);
+
+// 已經手記過同一筆股利？（付款日前後 20 天內，有收入備註提到代號或股息，金額差不多）
+function alreadyRecorded(data, sym, pay, amounts) {
+  const t0 = Date.parse(pay);
+  for (const tx of Object.values(data.months || {})) for (const e of Object.values(tx || {})) {
+    if (!e || e.t !== "i") continue;
+    if (Math.abs(Date.parse(e.d) - t0) > 20 * 864e5) continue;
+    const n = String(e.n || "");
+    if (!(n.includes(sym) || /股息|股利|配息|除息/.test(n))) continue;
+    if (amounts.some(a => Math.abs(Number(e.a) - a) <= Math.max(10, a * 0.05))) return true;
+  }
+  return false;
+}
+
+// 算出這個帳號要新增的股息收入、即將入帳清單
+export function planDividends(data, divsBySym, todayStr) {
+  const incCats = (data.settings && data.settings.cats && data.settings.cats.i) || [];
+  const cat = (incCats.find(c => c.id === "yield") || incCats.find(c => /投資收益|股利|股息/.test(c.n || "")) || incCats[0] || { id: "yield" }).id;
+  const done = data.divDone || {}, add = [], upcoming = [];
+  const from = new Date(Date.parse(todayStr) - DIV_BACK_DAYS * 864e5).toISOString().slice(0, 10);
+  for (const [sym, list] of Object.entries(divsBySym)) {
+    for (const v of list) {
+      const sh = sharesBefore(data, sym, v.exd);
+      if (!(sh > 0)) continue;
+      const amt = divAmount(sh, v.cps), id = divId(sym, v.exd);
+      if (!v.pay || v.pay > todayStr) { if (v.exd >= from) upcoming.push({ sym, exd: v.exd, pay: v.pay, cps: v.cps, sh, gross: amt.gross, net: amt.net }); continue; }
+      if (v.pay < from || done[id]) continue;
+      if (alreadyRecorded(data, sym, v.pay, [amt.net, amt.gross])) { add.push({ id, skip: true }); continue; }
+      const n = `${sym} 股息 每股 ${v.cps} × ${fmt(sh)} 股` + (amt.nhi ? `，扣二代健保 ${fmt(amt.nhi)}` : "");
+      add.push({ id, mk: v.pay.slice(0, 7), e: { t: "i", c: cat, a: amt.net, d: v.pay, n: n.slice(0, 60), ts: Date.now() } });
+    }
+  }
+  upcoming.sort((a, b) => (a.pay || a.exd) < (b.pay || b.exd) ? -1 : 1);
+  return { add, upcoming };
+}
+
 // 把收盤資料合併進某個帳號原本的 quotes；沒變就回傳 null
 export function merge(oldQuotes, syms, map) {
   const q = { px: { ...((oldQuotes && oldQuotes.px) || {}) }, at: String((oldQuotes && oldQuotes.at) || "") };
@@ -217,6 +294,7 @@ async function main() {
   console.log("收盤資料筆數：", Object.keys(map).length);
   const realtime = process.env.MODE === "realtime";
   const thisMk = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 7);
+  let divFail = 0;
   console.log("模式：", realtime ? "即時價（手動啟動）" : "收盤價（排程）");
 
   initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
@@ -264,12 +342,29 @@ async function main() {
     }
     const back = backfillPlh(data, series, thisMk);
     const upd = [];
+    // 股息：每檔查一次 FinMind（最近 15 個月＋已公告的未來），付款日到了就記成收入
+    const todayStr = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const divsBySym = {};
+    for (const s of syms) {
+      try { divsBySym[s] = await fetchDividends(s, addMonth(thisMk, -15) + "-01"); } catch (e) { divFail++; }
+      await sleep(400);
+    }
+    const dv = planDividends(data, divsBySym, todayStr);
+    for (const a of dv.add) {
+      if (!a.skip) upd.push(new FieldPath("months", a.mk, a.id), a.e);
+      upd.push(new FieldPath("divDone", a.id), 1);
+    }
+    if (JSON.stringify(dv.upcoming) !== JSON.stringify(data.divs || [])) upd.push("divs", dv.upcoming);
+    const nAdd = dv.add.filter(a => !a.skip).length;
+    if (nAdd || dv.add.length) console.log(`  股息：新增 ${nAdd} 筆入帳${dv.add.length - nAdd ? `，${dv.add.length - nAdd} 筆已手記略過` : ""}`);
+    if (dv.upcoming.length) console.log(`  即將入帳股息 ${dv.upcoming.length} 筆`);
     for (const s in phUpd) upd.push(new FieldPath("ph", s), phUpd[s]);
     for (const mk in back) upd.push(new FieldPath("plh", mk), back[mk]);
     if (upd.length) await doc.ref.update(...upd);
     if (Object.keys(back).length) console.log(`  補上 ${Object.keys(back).length} 個月的月底浮動盈虧（估算）`);
     console.log(`帳號 ${doc.id.slice(0, 6)}…：持股 ${syms.length} 檔，${q ? "已更新" : "沒有變動"}${miss.length ? "，" + miss.length + " 檔找不到價格" : ""}`);
   }
+  if (divFail) console.log(`股利資料有 ${divFail} 檔抓不到，明天會再試`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
