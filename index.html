@@ -450,6 +450,14 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .ar-add input,.ar-add select{border:1px solid var(--rule);border-radius:4px;background:var(--panel-2);padding:6px 8px;font-size:14px;color:var(--ink);min-width:0;width:100%}
 .ar-add input:focus,.ar-add select:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--ring)}
 #autoCat{color:var(--gold-ink)}
+.ro{margin-top:12px;padding-top:10px;border-top:1px dashed var(--rule-soft)}
+.ro h4{margin:0 0 2px;font-size:13.5px}
+.ro label{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:13.5px;cursor:pointer;border-bottom:1px solid var(--rule-soft)}
+.ro label span{flex:1;min-width:0}
+.ro label small{font-family:var(--mono);color:var(--ink-3)}
+.ro label small.pos{color:var(--good)}
+.ro label small.neg{color:var(--bad)}
+.rbud .ro-c{font-size:11px;color:var(--ink-3);margin-left:4px}
 .mp{margin:2px 0 6px}
 .mp-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--rule-soft);font-size:13.5px}
 .mp-row>span:first-child{flex:1;min-width:0;color:var(--ink-2)}
@@ -1239,6 +1247,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
           </div>
           <button type="button" class="btn" id="catAdd" style="align-self:flex-start">＋ 新增分類</button>
           <div class="note" id="catNote"></div>
+          <div class="ro" id="roBox"></div>
         </div>
       </details>
 
@@ -2093,7 +2102,9 @@ function cleanSettings(x){
     src.forEach(k => {
       if(!k || typeof k.id !== "string" || !/^[a-z0-9]{1,24}$/.test(k.id) || seen[k.id]) return;
       seen[k.id] = 1;
-      list.push({ id: k.id, n: String(k.n || "").slice(0, 12) || "未命名", b: Math.max(0, Math.round(Number(k.b) || 0)), h: k.h ? 1 : 0 });
+      const it = { id: k.id, n: String(k.n || "").slice(0, 12) || "未命名", b: Math.max(0, Math.round(Number(k.b) || 0)), h: k.h ? 1 : 0 };
+      if(t === "e" && k.ro && MRE.test(String(k.ros || ""))){ it.ro = 1; it.ros = String(k.ros); }   // 預算滾存：從 ros 那個月開始累計
+      list.push(it);
     });
     if(!list.length){ out.cats[t] = d.cats[t]; return; }
     if(!list.some(k => !k.h)) list[0].h = 0;
@@ -2756,6 +2767,7 @@ function renderAll(){
   renderPlan();
   renderMP();
   renderAR();
+  renderRO();
   renderHoldChart();
   renderRules(r);
   $("mReview").hidden = !S.ready || S.view >= curMk() || !(S.months[S.view] && Object.keys(S.months[S.view]).length);
@@ -2887,6 +2899,45 @@ function daysTo(ds){
   const t = new Date(today() + "T00:00:00"), d = new Date(ds + "T00:00:00");
   return Math.round((d - t) / 86400000);
 }
+/* ===== 預算滾存 =====
+   開啟後，從開啟那個月起，每個月「預算 − 實際花費」累計到下個月（超支就從下個月扣），最低扣到 0。
+   以目前設定的預算金額計算每個月。 */
+function spentOf(cid, mk){
+  const m = S.months[mk];
+  let t = 0;
+  if(m) for(const id in m){ const e = m[id]; if(e.t === "e" && e.c === cid) t += e.a; }
+  return t;
+}
+function carryOf(c, mk){
+  if(!c || !c.ro || !c.ros || !c.b || mk <= c.ros) return 0;
+  let carry = 0, n = 0;
+  for(let m = c.ros; m < mk && n < 240; m = addM(m, 1), n++) carry += c.b - spentOf(c.id, m);
+  return Math.max(-c.b, carry);
+}
+const budOf = (c, mk) => c && c.b ? c.b + carryOf(c, mk) : 0;
+function renderRO(){
+  const box = $("roBox");
+  if(!box) return;
+  if(S.catEdit !== "e"){ box.innerHTML = ""; return; }
+  const cats = catsOf("e").filter(c => !c.h && c.b > 0), cm = curMk();
+  box.innerHTML = '<h4>預算滾存</h4><p class="note" style="margin:0 0 4px">勾選的分類，沒花完的錢會留到下個月；超支的部分從下個月扣。</p>' +
+    (cats.length ? cats.map(c => {
+      const cr = carryOf(c, cm);
+      return '<label><input type="checkbox" data-ro="' + esc(c.id) + '"' + (c.ro ? " checked" : "") + (S.readonly ? " disabled" : "") + '><span>' + esc(c.n) + "</span>" +
+        (c.ro ? '<small class="' + (cr > 0 ? "pos" : cr < 0 ? "neg" : "") + '">本月可用 ' + n0(c.b + cr) + (cr ? "（" + (cr > 0 ? "+" : "−") + n0(Math.abs(cr)) + "）" : "") + "</small>" : "<small>每月 " + n0(c.b) + "</small>") + "</label>";
+    }).join("") : '<div class="note">先在上面幫支出分類設預算，才能開滾存。</div>');
+}
+function bindRO(){
+  $("roBox").addEventListener("change", ev => {
+    const id = ev.target.getAttribute("data-ro");
+    if(!id) return;
+    const c = catsOf("e").find(k => k.id === id);
+    if(!c) return;
+    if(ev.target.checked){ c.ro = 1; c.ros = curMk(); toast(c.n + " 開始滾存：這個月沒花完的會留到下個月。"); }
+    else { delete c.ro; delete c.ros; }
+    saveSettings(); renderAll();
+  });
+}
 const saveGoal = () => { const m = S.settings.mp || cleanMP(null); return m.sav.reduce((t, q) => t + q.a, 0); };
 function renderRules(r){
   const el = $("ruleChk");
@@ -2897,10 +2948,11 @@ function renderRules(r){
     (ok ? '<span class="ok">達標 ✓</span>' : '<span class="note">還差 ' + money(saveGoal() - sav) + "</span>") + "</div>";
   let over = 0;
   h += cats.map(c => {
-    const u = r.by.e[c.id] || 0, pct = u / c.b * 100, cls = pct > 100 ? "over" : pct >= 80 ? "warn" : "";
+    const B = budOf(c, S.view), cr = B - c.b;
+    const u = r.by.e[c.id] || 0, pct = B > 0 ? u / B * 100 : (u > 0 ? 101 : 0), cls = pct > 100 ? "over" : pct >= 80 ? "warn" : "";
     if(pct > 100) over++;
-    return '<div class="rbud"><span>' + esc(c.n) + '</span><span class="bar"><i class="' + cls + '" style="width:' + Math.min(100, pct).toFixed(1) + '%"></i></span>' +
-      '<span class="v' + (pct > 100 ? " over" : "") + '">' + n0(u) + " / " + n0(c.b) + "</span></div>";
+    return '<div class="rbud"><span>' + esc(c.n) + (cr ? '<small class="ro-c">' + (cr > 0 ? "+" : "−") + n0(Math.abs(cr)) + "</small>" : "") + '</span><span class="bar"><i class="' + cls + '" style="width:' + Math.min(100, pct).toFixed(1) + '%"></i></span>' +
+      '<span class="v' + (pct > 100 ? " over" : "") + '">' + n0(u) + " / " + n0(B) + "</span></div>";
   }).join("");
   if(!cats.length) h += '<div class="note">還沒設預算上限。</div>';
   el.innerHTML = h;
@@ -3408,9 +3460,9 @@ function renderRvAI(mk, r){
   else { warn.push("只存入 " + money(save) + "，離每月 " + money(saveGoal()) + " 還差 " + money(saveGoal() - save) + "。"); act.push("下個月發薪當天就先轉 " + money(saveGoal()) + " 出去，剩下的才拿來花。"); }
   const cats = catsOf("e").filter(c => c.b > 0 && !c.h);
   const over = [], okc = [];
-  cats.forEach(c => { const u = r.by.e[c.id] || 0; if(u > c.b) over.push([c, u]); else if(u > 0) okc.push(c.n); });
-  over.sort((a, b) => (b[1] - b[0].b) - (a[1] - a[0].b));
-  over.forEach(([c, u]) => warn.push(c.n + " 花了 " + money(u) + "，超過上限 " + money(c.b) + "（多 " + money(u - c.b) + "）。"));
+  cats.forEach(c => { const u = r.by.e[c.id] || 0, B = budOf(c, mk); if(u > B) over.push([c, u, B]); else if(u > 0) okc.push(c.n); });
+  over.sort((a, b) => (b[1] - b[2]) - (a[1] - a[2]));
+  over.forEach(([c, u, B]) => warn.push(c.n + " 花了 " + money(u) + "，超過上限 " + money(B) + "（多 " + money(u - B) + "）。"));
   if(okc.length) good.push(okc.join("、") + " 都在預算內。");
   if(over.length) act.push("先檢討超最多的「" + over[0][0].n + "」：哪幾筆是可以不買或延後的？");
   const big = r.list.filter(e => e.t === "e" && !e.f && e.a >= 1000).sort((a, b) => b.a - a.a);
@@ -3482,7 +3534,7 @@ function renderCheer(){
     if(r.list.length && nz >= 3) L.push(["🍃", "這個月已經有 <b>" + nz + "</b> 天沒花錢"]);
     const cats = catsOf("e").filter(c => c.b > 0 && !c.h);
     if(cats.length){
-      const tot = cats.reduce((a, c) => a + c.b, 0), sp = cats.reduce((a, c) => a + (r.by.e[c.id] || 0), 0);
+      const tot = cats.reduce((a, c) => a + budOf(c, cm), 0), sp = cats.reduce((a, c) => a + (r.by.e[c.id] || 0), 0);
       const pace = elapsedDays(cm) / dim(cm);
       if(sp / tot < pace - .05) L.push(["👍", "預算比進度還省，還有 <b>" + money(tot - sp) + "</b> 可以用"]);
     }
@@ -3618,7 +3670,7 @@ function renderBudget(r){
     BUDC = { mk: S.view, over: false };
     return;
   }
-  const total = cats.reduce((s, c) => s + c.b, 0);
+  const total = cats.reduce((s, c) => s + budOf(c, S.view), 0);
   let spent = 0, fixed = 0;
   cats.forEach(c => { spent += r.by.e[c.id] || 0; fixed += r.byF[c.id] || 0; });
   const p = spent / total;
@@ -3828,7 +3880,7 @@ function renderCalDay(){
     const v = byCat[c];
     let of = "", over = false;
     if(isFood(c)){
-      const cat = catsOf("e").find(x => x.id === c), b = cat && cat.b > 0 ? cat.b : 0;
+      const cat = catsOf("e").find(x => x.id === c), b = cat && cat.b > 0 ? budOf(cat, mkOf(k)) : 0;
       if(b){ const per = Math.round(b / dim(mkOf(k))); of = '<span class="of">/ ' + n0(per) + "</span>"; over = v > per; }
     }
     return '<span class="cc' + (isFood(c) ? " food" : "") + (over ? " over" : "") + '">' + esc(catName("e", c)) + "<b>" + n0(v) + "</b>" + of + "</span>";
@@ -3860,7 +3912,7 @@ function renderBreakdown(r){
   if(!S.ready){ $("crows").innerHTML = '<div class="empty">讀取中…</div>'; renderDonut([], t); return; }
   catsOf(t).forEach(c => {
     seen[c.id] = 1;
-    const a = by[c.id] || 0, b = t === "e" && !c.h ? c.b : 0;
+    const a = by[c.id] || 0, b = t === "e" && !c.h ? budOf(c, S.view) : 0;
     if(a > 0 || b > 0) rows.push({ id: c.id, n: c.n, a, b });
   });
   for(const id in by) if(!seen[id]) rows.push({ id, n: "未分類", a: by[id], b: 0 });
@@ -4525,6 +4577,7 @@ function renderCatEditor(){
     '<button type="button" class="del" data-del="' + esc(c.id) + '" aria-label="刪除分類 ' + esc(c.n) + '"' + (vis.length <= 1 ? " disabled" : "") + ">×</button></div>"
   ).join("");
   renderCatNote();
+  renderRO();
 }
 function renderCatNote(){
   const t = S.catEdit;
@@ -5057,6 +5110,7 @@ function bind(){
   bindHold();
   bindHoldChart();
   bindAR();
+  bindRO();
   bindMP();
   bindIcon();
   bindPlan();
