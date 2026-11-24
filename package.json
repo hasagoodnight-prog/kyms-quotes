@@ -2,6 +2,12 @@
   "name": "kyms-quotes",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node update-quotes.mjs", "review": "node review-month.mjs" },
-  "dependencies": { "firebase-admin": "^13.0.0" }
+  "scripts": {
+    "start": "node update-quotes.mjs",
+    "backup": "node backup.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "age-encryption": "^0.3.1"
+  }
 }

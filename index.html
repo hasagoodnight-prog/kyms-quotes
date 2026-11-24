@@ -3395,8 +3395,7 @@ function renderRvAI(mk, r){
     "<p>支出 " + money(r.exp) + "，其中每月固定 " + money(r.fixE) + "（" + fixedRate + "%）。</p>" +
     (good.length ? '<h4 class="g">做得好</h4>' + li(good) : "") +
     (warn.length ? '<h4 class="w">要注意</h4>' + li(warn) : "") +
-    (act.length ? '<h4 class="a">改善點</h4>' + li(act) : "") +
-    '<div class="nt">每月 1 日 AI 會寫好上個月的詳細分析，到時會取代這一段。</div>';
+    (act.length ? '<h4 class="a">改善點</h4>' + li(act) : "");
 }
 let rvFrom = null;
 function closeReview(){

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>備份金鑰與還原</title>
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+<style>
+:root{
+  color-scheme:light;
+  --bg:#F7F9FB;--panel:#FFFFFF;--rule:#D2DBE3;--ink:#111A23;--ink-2:#43576A;--ink-3:#5F7387;
+  --gold:#8C5810;--gold-soft:#FBF2E2;--gold-line:#E0C391;--good:#1B8052;--bad:#BE4630;--bad-soft:#FBEDEA;
+  --focus:#1A89BF;--ring:rgba(26,137,191,.22);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  color-scheme:dark;
+  --bg:#0E141A;--panel:#151D25;--rule:#2A3742;--ink:#E7EDF2;--ink-2:#B3C1CD;--ink-3:#8A9AA8;
+  --gold:#E0A85A;--gold-soft:#2A2114;--gold-line:#5E4825;--good:#4CC08A;--bad:#F07A63;--bad-soft:#2C1A17;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.65}
+.wrap{max-width:720px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+.lede{color:var(--ink-2);margin:0 0 20px}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:18px;margin-bottom:16px}
+.card h2{font-size:17px;margin:0 0 6px}
+.card p{margin:6px 0;color:var(--ink-2)}
+.steps{margin:8px 0 0;padding-left:20px;color:var(--ink-2)}
+button,.btn{font:inherit;border:1px solid var(--rule);background:var(--panel);color:var(--ink);border-radius:4px;padding:8px 14px;cursor:pointer}
+button.primary{background:var(--gold);border-color:var(--gold);color:#fff;font-weight:700}
+@media (prefers-color-scheme:dark){button.primary{color:#111}}
+button:disabled{opacity:.5;cursor:not-allowed}
+button:focus-visible,textarea:focus,input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 3px var(--ring)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+label.f{display:block;font-size:13px;color:var(--ink-3);margin:12px 0 4px}
+textarea{width:100%;min-height:74px;font-family:var(--mono);font-size:12px;border:1px solid var(--rule);border-radius:4px;background:var(--bg);color:var(--ink);padding:8px;resize:vertical;word-break:break-all}
+input[type=file]{font:inherit;font-size:14px;max-width:100%}
+.key{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--rule);border-radius:4px;padding:8px;word-break:break-all;max-height:120px;overflow:auto}
+.warn{background:var(--bad-soft);border:1px solid var(--bad);color:var(--ink);border-radius:4px;padding:10px 12px;margin:10px 0;font-size:14px}
+.ok{color:var(--good);font-weight:600}
+.err{color:var(--bad);font-weight:600}
+.msg{margin-top:10px;min-height:1.6em}
+.sum{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin-top:10px;font-size:14px}
+.sum span{color:var(--ink-3)}
+.sum b{font-family:var(--mono)}
+.note{font-size:13px;color:var(--ink-3)}
+a{color:var(--focus)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>備份金鑰與還原</h1>
+  <p class="lede">記帳資料每週會自動加密備份到 GitHub。這一頁用來產生金鑰和解開備份。<b>所有運算都在你的瀏覽器裡完成</b>，金鑰和資料不會傳到任何地方。</p>
+
+  <section class="card" aria-labelledby="h-gen">
+    <h2 id="h-gen">1. 產生金鑰（只要做一次）</h2>
+    <p>會產生一對金鑰：<b>公鑰</b>拿來上鎖（加密），可以公開；<b>私鑰</b>拿來開鎖（解密），只有你能有。</p>
+    <div class="row"><button type="button" class="primary" id="gen">產生新金鑰</button></div>
+    <div id="genOut" hidden>
+      <label class="f">公鑰（可以公開，貼給 Claude 或存進 repo 的 backup-recipient.txt）</label>
+      <div class="key" id="pub"></div>
+      <div class="row"><button type="button" id="copyPub">複製公鑰</button></div>
+      <label class="f">私鑰（絕對不要給任何人，也不要貼到對話或 GitHub）</label>
+      <div class="warn">私鑰弄丟了，所有備份都<b>永遠打不開</b>，沒有人能幫你救回。請下載存好，並另外再存一份，例如密碼管理器、隨身碟。</div>
+      <div class="key" id="sec"></div>
+      <div class="row"><button type="button" class="primary" id="dlSec">下載私鑰檔</button><button type="button" id="copySec">複製私鑰</button></div>
+    </div>
+    <div class="msg" id="genMsg" role="status"></div>
+  </section>
+
+  <section class="card" aria-labelledby="h-dec">
+    <h2 id="h-dec">2. 解開備份</h2>
+    <p>到 <a href="https://github.com/hasagoodnight-prog/kyms-quotes/tree/backups/backups" target="_blank" rel="noopener">GitHub 的 backups 分支</a> 點一個 <code>.age</code> 檔，按右上角下載（Download raw file），再選在下面。</p>
+    <label class="f" for="encFile">備份檔（.age）</label>
+    <input type="file" id="encFile" accept=".age,application/octet-stream">
+    <label class="f" for="keyText">私鑰：貼上，或選私鑰檔</label>
+    <textarea id="keyText" placeholder="AGE-SECRET-KEY-PQ-1…" spellcheck="false" autocomplete="off"></textarea>
+    <div class="row"><input type="file" id="keyFile" accept=".txt,text/plain" aria-label="選私鑰檔"><button type="button" class="primary" id="dec">解開</button></div>
+    <div class="msg" id="decMsg" role="status"></div>
+    <div id="decOut" hidden>
+      <div class="sum" id="sum"></div>
+      <div class="row"><button type="button" class="primary" id="dlJson">下載解開的 JSON</button></div>
+      <p class="note">JSON 裡是完整的記帳資料（設定、每月紀錄、股價、持股）。要把它還原回記帳台，請找 Claude 協助匯入。</p>
+    </div>
+  </section>
+
+  <p class="note">加密方式：age（X25519 + ML-KEM-768 後量子混合金鑰，ChaCha20-Poly1305）。函式庫：<a href="https://github.com/FiloSottile/typage" target="_blank" rel="noopener">typage</a> 0.3.1，放在本站 vendor/ 資料夾，不從外部載入。</p>
+</div>
+
+<script type="module">
+import { Decrypter, generateHybridIdentity, identityToRecipient } from "./vendor/age-encryption-0.3.1.js";
+
+const $ = id => document.getElementById(id);
+const say = (el, t, cls) => { el.className = "msg" + (cls ? " " + cls : ""); el.textContent = t; };
+const download = (name, data, type) => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([data], { type }));
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+};
+const copy = async (t, el) => { try { await navigator.clipboard.writeText(t); say(el, "已複製。", "ok"); } catch (e) { say(el, "無法自動複製，請手動選取複製。", "err"); } };
+
+let SEC = "", PUB = "", PLAIN = "", PLAIN_NAME = "";
+
+$("gen").addEventListener("click", async () => {
+  if (SEC && !confirm("已經產生過一組金鑰。再產生一組新的，舊的那組就不會顯示在這裡了。確定？")) return;
+  $("gen").disabled = true;
+  try {
+    SEC = await generateHybridIdentity();
+    PUB = await identityToRecipient(SEC);
+    $("pub").textContent = PUB;
+    $("sec").textContent = SEC;
+    $("genOut").hidden = false;
+    say($("genMsg"), "金鑰已產生。先下載私鑰檔存好，再把公鑰交出去。", "ok");
+  } catch (e) { say($("genMsg"), "產生失敗：" + e.message, "err"); }
+  $("gen").disabled = false;
+});
+$("copyPub").addEventListener("click", () => copy(PUB, $("genMsg")));
+$("copySec").addEventListener("click", () => copy(SEC, $("genMsg")));
+$("dlSec").addEventListener("click", () => {
+  const d = new Date().toISOString().slice(0, 10);
+  download("kyms-backup-private-key-" + d + ".txt",
+    "# 收支記帳台 備份私鑰（" + d + " 產生）\n# 不要給任何人。弄丟了備份就打不開。\n# 對應的公鑰：" + PUB + "\n" + SEC + "\n", "text/plain");
+});
+
+$("keyFile").addEventListener("change", async () => {
+  const f = $("keyFile").files[0];
+  if (f) $("keyText").value = (await f.text()).split(/\r?\n/).filter(l => l.trim() && !l.trim().startsWith("#")).join("\n");
+});
+
+$("dec").addEventListener("click", async () => {
+  const f = $("encFile").files[0], keys = $("keyText").value.split(/\s+/).filter(k => /^AGE-SECRET-KEY-/i.test(k));
+  $("decOut").hidden = true;
+  if (!f) return say($("decMsg"), "請先選備份檔（.age）。", "err");
+  if (!keys.length) return say($("decMsg"), "請貼上私鑰（AGE-SECRET-KEY- 開頭），或選私鑰檔。", "err");
+  say($("decMsg"), "解密中…");
+  try {
+    const d = new Decrypter();
+    keys.forEach(k => d.addIdentity(k.toUpperCase()));
+    PLAIN = await d.decrypt(new Uint8Array(await f.arrayBuffer()), "text");
+    PLAIN_NAME = f.name.replace(/\.age$/i, "") || "kyms-backup.json";
+    let info = null;
+    try { info = JSON.parse(PLAIN); } catch (e) {}
+    const rows = [];
+    if (info && info.docs) {
+      const ids = Object.keys(info.docs);
+      let months = 0, entries = 0;
+      ids.forEach(id => { const m = info.docs[id].months || {}; months += Object.keys(m).length; Object.values(m).forEach(x => entries += Object.keys(x || {}).length); });
+      rows.push(["備份時間", new Date(info.exportedAt).toLocaleString("zh-TW")], ["帳號數", ids.length], ["月份", months], ["記帳筆數", entries]);
+    }
+    rows.push(["大小", (PLAIN.length / 1024).toFixed(1) + " KB"]);
+    $("sum").innerHTML = rows.map(([k, v]) => "<span>" + k + "</span><b>" + String(v).replace(/[<&]/g, c => c === "<" ? "&lt;" : "&amp;") + "</b>").join("");
+    $("decOut").hidden = false;
+    say($("decMsg"), "解開了。", "ok");
+  } catch (e) {
+    say($("decMsg"), "解不開：私鑰不對，或檔案不是這組金鑰加密的。（" + e.message + "）", "err");
+  }
+});
+$("dlJson").addEventListener("click", () => download(PLAIN_NAME, PLAIN, "application/json"));
+</script>
+</body>
+</html>
