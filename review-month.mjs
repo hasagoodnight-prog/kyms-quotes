@@ -1,19 +1,13 @@
-// 每月 1 日：把上個月的記帳整理成摘要，請 AI 寫月報分析，存進 Firebase 的 jizhangState/{uid}.reviews.m[YYYY-MM]
-// 用 GitHub Models（GitHub 免費額度，GitHub Actions 內用 GITHUB_TOKEN，不需要另外的金鑰）。
-// 網頁「月報」會優先顯示這份分析；已經寫過的月份不會重寫（FORCE=1 可強制重寫）。
-// 環境變數：FIREBASE_SERVICE_ACCOUNT、GITHUB_TOKEN；可選 MODEL、MONTH=2026-11、FORCE=1、LIST_MODELS=1
+// 每月 1 日：把上個月的記帳整理成摘要，請 AI（Google Gemini 免費方案）寫月報分析，
+// 存進 Firebase 的 jizhangState/{uid}.reviews.m[YYYY-MM]。網頁「月報」會優先顯示這份分析。
+// 已經寫過的月份不會重寫（FORCE=1 可強制重寫）。
+// 環境變數：FIREBASE_SERVICE_ACCOUNT、GEMINI_API_KEY；可選 MODEL、MONTH=2026-11、FORCE=1、LIST_MODELS=1
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldPath } from "firebase-admin/firestore";
 
-const INFER = "https://models.github.ai/inference/chat/completions";
-const CATALOG = "https://models.github.ai/catalog/models";
-const DEFAULT_MODEL = "openai/gpt-4.1";
-const GH_HEADERS = () => ({
-  authorization: "Bearer " + process.env.GITHUB_TOKEN,
-  accept: "application/vnd.github+json",
-  "x-github-api-version": "2022-11-28",
-  "content-type": "application/json",
-});
+const API = "https://generativelanguage.googleapis.com/v1beta";
+const DEFAULT_MODEL = "gemini-2.5-flash";
+const KEY_HEADERS = () => ({ "x-goog-api-key": process.env.GEMINI_API_KEY, "content-type": "application/json" });
 
 const SAVE_GOAL = 10000; // 和網頁的「每月先存」目標一致
 const MRE = /^\d{4}-\d{2}$/;
@@ -78,45 +72,58 @@ export function cleanReview(txt) {
   return out;
 }
 
-async function writeReview(model, summary) {
-  const res = await fetch(INFER, {
+// 列出這把金鑰能用、而且能產生文字的模型
+async function availableModels() {
+  const out = [];
+  let page = "";
+  do {
+    const res = await fetch(`${API}/models?pageSize=200${page ? "&pageToken=" + page : ""}`, { headers: KEY_HEADERS() });
+    if (!res.ok) throw new Error(`讀不到模型清單：${res.status} ${(await res.text()).slice(0, 200)}`);
+    const d = await res.json();
+    for (const m of d.models || []) {
+      if ((m.supportedGenerationMethods || []).includes("generateContent")) out.push({ id: m.name.replace(/^models\//, ""), name: m.displayName || "" });
+    }
+    page = d.nextPageToken || "";
+  } while (page);
+  return out;
+}
+
+export async function callGemini(model, summary) {
+  const res = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
-    headers: GH_HEADERS(),
+    headers: KEY_HEADERS(),
     body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: SYSTEM },
-        { role: "user", content: "這是我這個月的記帳摘要，請寫月報分析：\n" + JSON.stringify(summary) },
-      ],
-      response_format: { type: "json_object" },
-      max_tokens: 2000,
+      systemInstruction: { parts: [{ text: SYSTEM }] },
+      contents: [{ role: "user", parts: [{ text: "這是我這個月的記帳摘要，請寫月報分析：\n" + JSON.stringify(summary) }] }],
+      generationConfig: { responseMimeType: "application/json", maxOutputTokens: 8192 },
     }),
   });
   const body = await res.text();
-  if (!res.ok) throw new Error(`GitHub Models 回應 ${res.status}：${body.slice(0, 300)}`);
-  const data = JSON.parse(body);
-  return cleanReview(data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content);
+  if (!res.ok) { const e = new Error(`Gemini 回應 ${res.status}：${body.slice(0, 300)}`); e.status = res.status; throw e; }
+  const d = JSON.parse(body), c = d.candidates && d.candidates[0];
+  const txt = c && c.content && (c.content.parts || []).map(p => p.text || "").join("");
+  if (!txt) throw new Error("Gemini 沒有回傳內容：" + body.slice(0, 300));
+  return cleanReview(txt);
+}
+
+// 指定的模型不存在（例如舊版被下架）時，自動改用清單裡最新的 flash 模型
+export async function pickModel(wanted) {
+  const list = await availableModels();
+  if (list.some(m => m.id === wanted)) return wanted;
+  const flash = list.map(m => m.id).filter(id => /^gemini-[\d.]+-flash$/.test(id)).sort().reverse();
+  const alt = flash[0] || (list.find(m => /flash/.test(m.id)) || {}).id;
+  if (!alt) throw new Error(`找不到模型 ${wanted}，也沒有可替代的 flash 模型`);
+  console.log(`找不到模型 ${wanted}，改用 ${alt}`);
+  return alt;
 }
 
 async function listModels(model) {
-  for (const accept of ["application/json", "application/vnd.github+json"]) {
-    const res = await fetch(CATALOG, { headers: { ...GH_HEADERS(), accept } });
-    const txt = await res.text();
-    let list = null;
-    try { list = JSON.parse(txt); } catch (e) {}
-    if (Array.isArray(list)) {
-      console.log("可以用的模型（填在 model 欄位的是 id）：");
-      for (const m of list) console.log(`- ${m.id}　${m.name || ""}　額度等級：${m.rate_limit_tier || "?"}`);
-      break;
-    }
-    console.log(`模型清單（accept=${accept}）回應 ${res.status}：${txt.slice(0, 200)}`);
-  }
-  // 順便試打一次，確認這個模型能用
-  const res = await fetch(INFER, {
-    method: "POST", headers: GH_HEADERS(),
-    body: JSON.stringify({ model, messages: [{ role: "user", content: "用繁體中文回一句：測試成功" }], max_tokens: 50 }),
-  });
-  console.log(`試打 ${model}：${res.status} ${(await res.text()).slice(0, 300)}`);
+  const list = await availableModels();
+  console.log("可以用的模型（填在 model 欄位的是 id）：");
+  for (const m of list) console.log(`- ${m.id}　${m.name}`);
+  const use = await pickModel(model);
+  try { const r = await callGemini(use, { 測試: "只是測試，請隨便寫一句總結", 記帳筆數: 0 }); console.log(`試打 ${use} 成功：`, r.sum); }
+  catch (e) { console.log(`試打 ${use} 失敗：`, e.message); }
 }
 
 async function main() {
@@ -124,8 +131,10 @@ async function main() {
   const thisMk = now.toISOString().slice(0, 7);
   const mk = MRE.test(process.env.MONTH || "") ? process.env.MONTH : prevMonth(thisMk);
   const force = process.env.FORCE === "1";
-  const model = (process.env.MODEL || "").trim() || DEFAULT_MODEL;
+  if (!process.env.GEMINI_API_KEY) { console.log("還沒設定 GEMINI_API_KEY，這次不產生分析。"); return; }
+  let model = (process.env.MODEL || "").trim() || DEFAULT_MODEL;
   if (process.env.LIST_MODELS === "1") { await listModels(model); return; }
+  model = await pickModel(model);
   console.log("分析月份：", mk, force ? "（強制重寫）" : "", "模型：", model);
 
   initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
@@ -139,7 +148,7 @@ async function main() {
     const summary = summarize(data, mk);
     if (!summary.記帳筆數) { console.log(`帳號 ${who}：${mk} 沒有紀錄，略過`); continue; }
     try {
-      const review = await writeReview(model, summary);
+      const review = await callGemini(model, summary);
       review.by = model;
       review.at = now.toISOString().slice(0, 10);
       await doc.ref.update(new FieldPath("reviews", "m", mk), review);
