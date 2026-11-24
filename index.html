@@ -1495,7 +1495,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc, updateDoc }
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, FieldPath, deleteField }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -1525,6 +1525,24 @@ window.cloudSync = {
     const ref = doc(fsDb, "jizhangState", window.cloudSync.uid);
     try{ await updateDoc(ref, data); }
     catch(e){ if(e && e.code === "not-found") await setDoc(ref, data); else throw e; }
+  },
+  /* 只寫有變動的欄位：ops = [[["months","2026-11","abc"], 值或 null(刪除)], …]，多台裝置同時用也不會互相蓋掉 */
+  async patch(ops){
+    if(!window.cloudSync.uid || !ops.length) return;
+    const ref = doc(fsDb, "jizhangState", window.cloudSync.uid);
+    for(let i = 0; i < ops.length; i += 400){
+      const args = [];
+      ops.slice(i, i + 400).forEach(([path, val]) => args.push(new FieldPath(...path), val === null ? deleteField() : val));
+      await updateDoc(ref, ...args);
+    }
+  },
+  /* 即時監聽雲端：別台裝置或股價排程改了資料，這裡馬上收到；自己還沒寫完的變更不觸發 */
+  watch(cb){
+    if(!window.cloudSync.uid) return () => {};
+    return onSnapshot(doc(fsDb, "jizhangState", window.cloudSync.uid), snap => {
+      if(snap.metadata.hasPendingWrites || !snap.exists()) return;
+      cb(snap.data());
+    }, () => {});
   }
 };
 
@@ -1569,6 +1587,7 @@ onAuthStateChanged(gateAuth, (user)=>{
     window.dispatchEvent(new CustomEvent('cloud-user-ready'));
   } else {
     overlay.style.display = 'flex'; root.style.display = 'none';
+    if(window.cloudSync.unwatch){ window.cloudSync.unwatch(); window.cloudSync.unwatch = null; }
     window.cloudSync.uid = null;
     const io = document.getElementById('import-overlay');
     if(io) io.hidden = true;
@@ -2410,21 +2429,82 @@ function readLocal(){
 }
 let localT = 0;
 let cloudOn = false;
+/* ===== 雲端同步：只寫有變動的部分，並即時收別台裝置的變更 =====
+   BASE＝最後一次和雲端一致的內容。存檔時跟 BASE 比，只送出差異；
+   收到雲端新內容時，先算出本機還沒送出的差異，換成雲端版本後再把差異疊回去。 */
+let BASE = null, syncQ = Promise.resolve(), syncRetry = 0;
+const jclone = o => JSON.parse(JSON.stringify(o == null ? null : o));
+const jeq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function setBase(){ BASE = { settings: jclone(S.settings), months: jclone(S.months), quotes: jclone(S.quotes) }; }
+function diffOps(){
+  if(!BASE) return [];
+  const ops = [];
+  if(!jeq(S.settings, BASE.settings)) ops.push([["settings"], jclone(S.settings)]);
+  const mks = new Set([...Object.keys(S.months), ...Object.keys(BASE.months || {})]);
+  mks.forEach(mk => {
+    const a = (BASE.months || {})[mk], b = S.months[mk];
+    if(!a && b){ ops.push([["months", mk], jclone(b)]); return; }
+    if(a && !b){ ops.push([["months", mk], null]); return; }
+    new Set([...Object.keys(a), ...Object.keys(b)]).forEach(id => {
+      if(!(id in b)) ops.push([["months", mk, id], null]);
+      else if(!jeq(a[id], b[id])) ops.push([["months", mk, id], jclone(b[id])]);
+    });
+  });
+  const pa = (BASE.quotes && BASE.quotes.px) || {}, pb = S.quotes.px || {};
+  new Set([...Object.keys(pa), ...Object.keys(pb)]).forEach(sym => {
+    if(!(sym in pb)) ops.push([["quotes", "px", sym], null]);
+    else if(!jeq(pa[sym], pb[sym])) ops.push([["quotes", "px", sym], jclone(pb[sym])]);
+  });
+  if((BASE.quotes && BASE.quotes.at) !== S.quotes.at) ops.push([["quotes", "at"], S.quotes.at || ""]);
+  return ops;
+}
+function applyOps(t, ops){
+  ops.forEach(([path, val]) => {
+    let o = t;
+    for(let i = 0; i < path.length - 1; i++){ if(!o[path[i]] || typeof o[path[i]] !== "object") o[path[i]] = {}; o = o[path[i]]; }
+    const k = path[path.length - 1];
+    if(val === null) delete o[k]; else o[k] = jclone(val);
+  });
+}
+function pushCloud(){
+  if(!cloudOn || !window.cloudSync || !BASE) return;
+  syncQ = syncQ.then(async () => {
+    const ops = diffOps();
+    if(!ops.length) return;
+    try{
+      await window.cloudSync.patch(ops);
+      applyOps(BASE, ops);
+      syncRetry = 0;
+      if(S.cloudErr){ S.cloudErr = false; renderStatus(); }
+    }catch(e){
+      S.cloudErr = true;
+      renderStatus();
+      if(!syncRetry) warn("雲端同步失敗，這筆紀錄先存在這台裝置，晚點會自動再試。");
+      clearTimeout(syncRetry);
+      syncRetry = setTimeout(() => { syncRetry = 0; pushCloud(); }, 15000);
+    }
+  });
+}
+function onRemote(d){
+  const local = diffOps();   // 本機還沒送出的變更
+  S.settings = cleanSettings(d.settings);
+  S.months = cleanMonths(d.months);
+  S.quotes = cleanQuotes(d.quotes);
+  S.reviews = cleanReviews(d.reviews);
+  S.plh = cleanPlh(d.plh);
+  S.ph = cleanPh(d.ph);
+  setBase();
+  if(local.length){ applyOps(S, local); pushCloud(); }
+  HKEY = "";
+  renderChips(); renderCatEditor(); renderAll();
+}
 function saveLocal(){
   clearTimeout(localT);
   localT = setTimeout(() => {
     const payload = { v: 1, settings: S.settings, months: S.months, quotes: S.quotes };
     try{ localStorage.setItem(LKEY, JSON.stringify(payload)); }
     catch(e){ warn("瀏覽器的儲存空間滿了，先匯出 CSV 備份。"); }
-    if(cloudOn && window.cloudSync){
-      window.cloudSync.setState(payload).then(() => {
-        if(S.cloudErr){ S.cloudErr = false; renderStatus(); }
-      }).catch(() => {
-        S.cloudErr = true;
-        warn("雲端同步失敗，這筆紀錄先存在這台裝置，晚點會自動再試。");
-        renderStatus();
-      });
-    }
+    pushCloud();
   }, 250);
 }
 function goLocal(){
@@ -2448,12 +2528,14 @@ window.addEventListener("cloud-user-ready", async () => {
       S.reviews = cleanReviews(remote.reviews);
       S.plh = cleanPlh(remote.plh);
       S.ph = cleanPh(remote.ph);
+      setBase();
       cloudOn = true;
     } else {
       const loc = readLocal();
       if(loc){
         const payload = { v: 1, settings: S.settings, months: S.months, quotes: S.quotes };
         await window.cloudSync.setState(payload);
+        setBase();
         cloudOn = true;
       } else {
         const io = document.getElementById("import-overlay");
@@ -2465,6 +2547,7 @@ window.addEventListener("cloud-user-ready", async () => {
     renderChips(); renderCatEditor(); renderAll();
     healCats();
     renderStatus();
+    if(cloudOn && !window.cloudSync.unwatch) window.cloudSync.unwatch = window.cloudSync.watch(onRemote);
   }catch(e){
     S.cloudErr = true;
     warn("雲端同步連不上，先繼續用這台裝置的紀錄，晚點再試。");
@@ -2478,7 +2561,9 @@ window.addEventListener("cloud-import-done", (ev) => {
   S.months = cleanMonths(data.months);
   S.quotes = cleanQuotes(data.quotes);
   S.reviews = cleanReviews(data.reviews);
+  setBase();
   cloudOn = true;
+  if(!window.cloudSync.unwatch) window.cloudSync.unwatch = window.cloudSync.watch(onRemote);
   gotSettings = gotMonths = true;
   if(!S.ready){ S.ready = true; A.intro = true; }
   renderChips(); renderCatEditor(); renderAll();

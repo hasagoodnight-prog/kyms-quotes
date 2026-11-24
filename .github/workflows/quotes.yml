@@ -4,18 +4,36 @@ on:
   schedule:
     # UTC 08:17 = 台灣時間 16:17，週一到週五
     - cron: "17 8 * * 1-5"
+    # 備援：GitHub 排程常延遲或漏跑，18:47 再跑一次（重複執行不會出錯）
+    - cron: "47 10 * * 1-5"
   workflow_dispatch: {}
+
+# 寫入權限只用在下面的 keepalive 空 commit
+permissions:
+  contents: write
 
 jobs:
   update:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
+      # 公開 repo 連續 60 天沒有任何活動，GitHub 會自動停用排程；超過 45 天沒 commit 就推一個空 commit
+      - name: keepalive
+        if: github.event_name == 'schedule'
+        run: |
+          days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "距離上次 commit：$days 天"
+          if [ "$days" -ge 45 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "keepalive：保持排程啟用"
+            git push
+          fi
       - run: node update-quotes.mjs
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
