@@ -1,28 +1,30 @@
-// 每月 1 日：把上個月的記帳整理成摘要，請 Claude 寫月報分析，存進 Firebase 的 jizhangState/{uid}.reviews.m[YYYY-MM]
+// 每月 1 日：把上個月的記帳整理成摘要，請 AI 寫月報分析，存進 Firebase 的 jizhangState/{uid}.reviews.m[YYYY-MM]
+// 用 GitHub Models（GitHub 免費額度，GitHub Actions 內用 GITHUB_TOKEN，不需要另外的金鑰）。
 // 網頁「月報」會優先顯示這份分析；已經寫過的月份不會重寫（FORCE=1 可強制重寫）。
-// 環境變數：FIREBASE_SERVICE_ACCOUNT、ANTHROPIC_API_KEY；可選 MONTH=2026-11、FORCE=1
+// 環境變數：FIREBASE_SERVICE_ACCOUNT、GITHUB_TOKEN；可選 MODEL、MONTH=2026-11、FORCE=1、LIST_MODELS=1
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, FieldPath } from "firebase-admin/firestore";
-import Anthropic from "@anthropic-ai/sdk";
-import { z } from "zod";
-import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+
+const INFER = "https://models.github.ai/inference/chat/completions";
+const CATALOG = "https://models.github.ai/catalog/models";
+const DEFAULT_MODEL = "openai/gpt-4.1";
+const GH_HEADERS = () => ({
+  authorization: "Bearer " + process.env.GITHUB_TOKEN,
+  accept: "application/vnd.github+json",
+  "x-github-api-version": "2022-11-28",
+  "content-type": "application/json",
+});
 
 const SAVE_GOAL = 10000; // 和網頁的「每月先存」目標一致
 const MRE = /^\d{4}-\d{2}$/;
-
-const ReviewSchema = z.object({
-  sum: z.string().describe("一段總結，150 字以內"),
-  good: z.array(z.string()).describe("做得好的地方，1–4 點"),
-  warn: z.array(z.string()).describe("要注意的地方，1–4 點"),
-  act: z.array(z.string()).describe("下個月具體可做的改善，2–4 點"),
-  goal: z.string().describe("下個月一個可量化的目標，一句話"),
-});
 
 const SYSTEM = `你是使用者的記帳助理，幫他寫每月的消費回顧。使用者在台灣，用繁體中文（台灣用語）回覆，金額用 NT$ 和千分位。
 語氣像朋友：直接、具體、不說教。每一點都要引用摘要裡的實際數字或項目，不要寫空泛的理財建議。
 重點看：每月先存 ${SAVE_GOAL} 有沒有達標、哪些分類超出預算、伙食每天平均多少、大額或不必要的花費、和上個月比的變化。
 固定支出（房租、訂閱、醫療這類）使用者已經說過不能改，不要建議砍它們。
-各欄位字數：sum 150 字內；good / warn / act 每點 60 字內；goal 一句話。`;
+只回傳一個 JSON 物件，不要其他文字，格式：
+{"sum": "總結，150 字內", "good": ["做得好，1–4 點"], "warn": ["要注意，1–4 點"], "act": ["下個月具體改善，2–4 點"], "goal": "下個月一個可量化的目標，一句話"}
+good / warn / act 每點 60 字內。`;
 
 function taipeiNow() { return new Date(Date.now() + 8 * 3600 * 1000); }
 function prevMonth(mk) {
@@ -31,7 +33,7 @@ function prevMonth(mk) {
 }
 const daysIn = mk => new Date(+mk.slice(0, 4), +mk.slice(5, 7), 0).getDate();
 
-// 把某個月的資料整理成給 Claude 看的摘要（只含這次分析需要的欄位）
+// 把某個月的資料整理成給 AI 看的摘要（只含這次分析需要的欄位）
 export function summarize(data, mk) {
   const cats = (data.settings && data.settings.cats) || {};
   const name = (t, id) => ((cats[t] || []).find(c => c.id === id) || {}).n || id;
@@ -64,18 +66,44 @@ export function summarize(data, mk) {
   };
 }
 
-async function writeReview(client, summary) {
-  const res = await client.messages.parse({
-    model: "claude-opus-5-5",
-    max_tokens: 16000,
-    output_config: { effort: "high", format: zodOutputFormat(ReviewSchema) },
-    system: SYSTEM,
-    messages: [{ role: "user", content: "這是我這個月的記帳摘要，請寫月報分析：\n" + JSON.stringify(summary, null, 1) }],
+// 檢查並整理 AI 回傳的 JSON，欄位長度和網頁 cleanReviews 的限制一致
+export function cleanReview(txt) {
+  const m = String(txt || "").match(/\{[\s\S]*\}/);
+  if (!m) throw new Error("回應裡沒有 JSON：" + String(txt).slice(0, 200));
+  const r = JSON.parse(m[0]);
+  const cut = (v, n) => String(v == null ? "" : v).slice(0, n);
+  const arr = v => Array.isArray(v) ? v.slice(0, 8).map(t => cut(t, 300)).filter(Boolean) : [];
+  const out = { sum: cut(r.sum, 600), good: arr(r.good), warn: arr(r.warn), act: arr(r.act), goal: cut(r.goal, 300) };
+  if (!out.sum && !out.act.length) throw new Error("回應缺少內容：" + m[0].slice(0, 200));
+  return out;
+}
+
+async function writeReview(model, summary) {
+  const res = await fetch(INFER, {
+    method: "POST",
+    headers: GH_HEADERS(),
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: SYSTEM },
+        { role: "user", content: "這是我這個月的記帳摘要，請寫月報分析：\n" + JSON.stringify(summary) },
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 2000,
+    }),
   });
-  if (res.stop_reason === "refusal") throw new Error("Claude 拒絕回應：" + JSON.stringify(res.stop_details));
-  if (!res.parsed_output) throw new Error("回應無法解析，stop_reason=" + res.stop_reason);
-  const r = res.parsed_output, cut = (s, n) => String(s || "").slice(0, n), arr = a => (a || []).slice(0, 8).map(t => cut(t, 300));
-  return { sum: cut(r.sum, 600), good: arr(r.good), warn: arr(r.warn), act: arr(r.act), goal: cut(r.goal, 300) };
+  const body = await res.text();
+  if (!res.ok) throw new Error(`GitHub Models 回應 ${res.status}：${body.slice(0, 300)}`);
+  const data = JSON.parse(body);
+  return cleanReview(data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content);
+}
+
+async function listModels() {
+  const res = await fetch(CATALOG, { headers: GH_HEADERS() });
+  if (!res.ok) throw new Error("讀不到模型清單：" + res.status);
+  const list = await res.json();
+  console.log("可以用的模型（填在 model 欄位的是 id）：");
+  for (const m of list) console.log(`- ${m.id}　${m.name || ""}　額度等級：${m.rate_limit_tier || "?"}`);
 }
 
 async function main() {
@@ -83,11 +111,12 @@ async function main() {
   const thisMk = now.toISOString().slice(0, 7);
   const mk = MRE.test(process.env.MONTH || "") ? process.env.MONTH : prevMonth(thisMk);
   const force = process.env.FORCE === "1";
-  console.log("分析月份：", mk, force ? "（強制重寫）" : "");
+  const model = (process.env.MODEL || "").trim() || DEFAULT_MODEL;
+  if (process.env.LIST_MODELS === "1") { await listModels(); return; }
+  console.log("分析月份：", mk, force ? "（強制重寫）" : "", "模型：", model);
 
   initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
   const db = getFirestore();
-  const client = new Anthropic();
   const snap = await db.collection("jizhangState").get();
   let failed = 0;
   for (const doc of snap.docs) {
@@ -97,7 +126,8 @@ async function main() {
     const summary = summarize(data, mk);
     if (!summary.記帳筆數) { console.log(`帳號 ${who}：${mk} 沒有紀錄，略過`); continue; }
     try {
-      const review = await writeReview(client, summary);
+      const review = await writeReview(model, summary);
+      review.by = model;
       review.at = now.toISOString().slice(0, 10);
       await doc.ref.update(new FieldPath("reviews", "m", mk), review);
       console.log(`帳號 ${who}：已寫入 ${mk} 月報分析`);

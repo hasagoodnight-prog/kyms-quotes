@@ -3066,7 +3066,7 @@ function renderRvAI(mk, r){
   const el = $("rvAI"), A2 = S.reviews[mk];
   const li = a => "<ul>" + a.map(t => "<li>" + esc(t) + "</li>").join("") + "</ul>";
   if(A2 && (A2.sum || A2.act.length)){
-    el.innerHTML = '<div class="rv-ai-h"><b>Claude 的分析與建議</b><span>' + esc(A2.at) + "</span></div>" +
+    el.innerHTML = '<div class="rv-ai-h"><b>AI 的分析與建議</b><span>' + esc(A2.at) + "</span></div>" +
       (A2.sum ? "<p>" + esc(A2.sum) + "</p>" : "") +
       (A2.good.length ? '<h4 class="g">做得好</h4>' + li(A2.good) : "") +
       (A2.warn.length ? '<h4 class="w">要注意</h4>' + li(A2.warn) : "") +
@@ -3098,7 +3098,7 @@ function renderRvAI(mk, r){
     (good.length ? '<h4 class="g">做得好</h4>' + li(good) : "") +
     (warn.length ? '<h4 class="w">要注意</h4>' + li(warn) : "") +
     (act.length ? '<h4 class="a">改善點</h4>' + li(act) : "") +
-    '<div class="nt">每月 1 日 Claude 會寫好上個月的詳細分析，到時會取代這一段。</div>';
+    '<div class="nt">每月 1 日 AI 會寫好上個月的詳細分析，到時會取代這一段。</div>';
 }
 let rvFrom = null;
 function closeReview(){

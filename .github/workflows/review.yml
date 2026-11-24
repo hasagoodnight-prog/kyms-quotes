@@ -6,6 +6,9 @@ on:
     - cron: "7 1 1 * *"
   workflow_dispatch:
     inputs:
+      model:
+        description: "模型 id（留空＝預設 openai/gpt-4.1）"
+        required: false
       month:
         description: "要分析的月份（YYYY-MM），留空＝上個月"
         required: false
@@ -13,6 +16,14 @@ on:
         description: "已經有分析也重寫"
         type: boolean
         default: false
+      list_models:
+        description: "只列出可以用的模型，不寫分析"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  models: read
 
 jobs:
   review:
@@ -27,6 +38,8 @@ jobs:
       - run: node review-month.mjs
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL: ${{ inputs.model || vars.REVIEW_MODEL }}
           MONTH: ${{ inputs.month }}
           FORCE: ${{ inputs.force && '1' || '' }}
+          LIST_MODELS: ${{ inputs.list_models && '1' || '' }}
