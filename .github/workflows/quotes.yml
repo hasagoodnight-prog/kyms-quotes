@@ -19,3 +19,5 @@ jobs:
       - run: node update-quotes.mjs
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # 手動啟動抓即時價，排程抓收盤價
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'realtime' || 'close' }}

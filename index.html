@@ -2109,6 +2109,7 @@ function cleanQuotes(x){
     const q = px[k], p = Number(q && q.p);
     if(!/^[0-9A-Z.]{1,10}$/.test(k) || !(p > 0)) continue;
     out.px[k] = { p, d: String(q.d || "").slice(0, 10), src: q.src === "manual" ? "manual" : "auto", n: String(q.n || "").slice(0, 20), chg: Number(q.chg) || 0 };
+    if(q.src !== "manual" && /^\d{2}:\d{2}$/.test(String(q.t || ""))) out.px[k].t = String(q.t);
   }
   return out;
 }
@@ -2866,7 +2867,7 @@ function renderHold(){
         '<label>平均成本<input type="text" inputmode="decimal" data-hf="cost" value="' + (h.cost || "") + '"></label>' +
         '<label>現價<input type="text" inputmode="decimal" data-hf="px" value="' + (q ? q.p : "") + '" placeholder="等收盤更新"></label></div>' +
         '<div class="hmeta pv">成本 ' + money(r.cost) + (r.mv != null ? "・市值 " + money(r.mv) : "") +
-        (q ? "・" + (q.src === "manual" ? "手動填 " : "收盤 ") + (q.d ? q.d.slice(5).replace("-", "/") : "") + (q.chg && q.src !== "manual" ? "（當日 " + (q.chg > 0 ? "+" : "") + q.chg + "）" : "") : "") + "</div>" +
+        (q ? "・" + (q.src === "manual" ? "手動填 " : q.t ? "即時 " : "收盤 ") + (q.d ? q.d.slice(5).replace("-", "/") : "") + (q.src !== "manual" && q.t ? " " + q.t : "") + (q.chg && q.src !== "manual" ? "（當日 " + (q.chg > 0 ? "+" : "") + q.chg + "）" : "") : "") + "</div>" +
         '<button type="button" class="btn link hdel" data-hdel="' + esc(h.sym) + '">移除這支</button></div></div></div>';
     }).join("");
 }

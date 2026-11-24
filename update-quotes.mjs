@@ -1,5 +1,7 @@
-// 每天收盤後抓證交所／櫃買中心收盤價，寫進 Firebase 的 jizhangState/{uid}.quotes
-// 只更新每個帳號「持股」裡的代號；手動填的價格，日期不比收盤資料舊就保留。
+// 抓股價寫進 Firebase 的 jizhangState/{uid}.quotes，只更新每個帳號「持股」裡的代號。
+// MODE=close（排程）：用證交所／櫃買中心最新公布的收盤價；當天收盤價還沒公布時，那份資料就是前一個交易日的。
+// MODE=realtime（手動啟動）：用證交所即時行情（盤中是最新成交價），抓不到的代號改用收盤價。
+// 手動填的價格，日期不比新資料舊就保留。
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 
@@ -39,6 +41,45 @@ export function parse(rows) {
   return out;
 }
 
+const MIS = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp";
+
+// 即時行情：同一個代號同時問上市（tse）和上櫃（otc），哪個有資料就用哪個
+// z＝最新成交價（這段時間沒成交是 "-"，改用最佳買價）、y＝昨收、d＝日期 YYYYMMDD、t＝時間
+export function parseMis(rows) {
+  const out = {};
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const code = String(r.c || "").trim().toUpperCase();
+    if (!SYM.test(code)) continue;
+    let p = num(r.z);
+    if (!(p > 0)) p = num(String(r.b || "").split("_")[0]);
+    if (!(p > 0)) continue;
+    const y = num(r.y);
+    out[code] = {
+      p,
+      n: String(r.n || "").trim().slice(0, 20),
+      chg: y > 0 ? Math.round((p - y) * 100) / 100 : 0,
+      d: toDate(r.d),
+      t: String(r.t || "").slice(0, 5),
+    };
+  }
+  return out;
+}
+
+async function getRealtime(syms) {
+  const out = {};
+  for (let i = 0; i < syms.length; i += 20) {
+    const part = syms.slice(i, i + 20);
+    const ex = part.flatMap(s => [`tse_${s}.tw`, `otc_${s}.tw`]).join("|");
+    const res = await fetch(`${MIS}?ex_ch=${encodeURIComponent(ex)}&json=1&delay=0&_=${Date.now()}`, {
+      headers: { "user-agent": "Mozilla/5.0 kyms-quotes", referer: "https://mis.twse.com.tw/stock/index.jsp" },
+    });
+    if (!res.ok) throw new Error("即時行情 " + res.status);
+    const d = await res.json();
+    Object.assign(out, parseMis(d.msgArray));
+  }
+  return out;
+}
+
 async function getJson(url) {
   const res = await fetch(url, { headers: { accept: "application/json", "user-agent": "Mozilla/5.0 kyms-quotes" } });
   if (!res.ok) throw new Error(url + " " + res.status);
@@ -52,13 +93,16 @@ export function merge(oldQuotes, syms, map) {
   for (const s of syms) {
     const n = map[s], old = q.px[s];
     if (!n || !n.d) continue;
-    if (n.d > latest) latest = n.d;
+    const stamp = n.d + (n.t ? " " + n.t : "");
+    if (stamp > latest) latest = stamp;
     if (old && old.src === "manual" && String(old.d || "") >= n.d) continue;
-    if (old && old.src === "auto" && old.p === n.p && old.d === n.d) continue;
+    if (old && old.src === "auto" && old.p === n.p && old.d === n.d && (old.t || "") === (n.t || "")) continue;
     q.px[s] = { p: n.p, d: n.d, src: "auto", n: n.n, chg: n.chg };
+    if (n.t) q.px[s].t = n.t;
     changed = true;
   }
-  if (latest && q.at !== latest + " 收盤") { q.at = latest + " 收盤"; changed = true; }
+  const at = latest ? latest + (latest.length > 10 ? " 即時" : " 收盤") : "";
+  if (at && q.at !== at) { q.at = at; changed = true; }
   return changed ? q : null;
 }
 
@@ -69,17 +113,30 @@ async function main() {
   if (a.status === "rejected" && b.status === "rejected") throw new Error("兩個資料來源都抓不到");
   const map = Object.assign({}, b.status === "fulfilled" ? parse(b.value) : {}, a.status === "fulfilled" ? parse(a.value) : {});
   console.log("收盤資料筆數：", Object.keys(map).length);
+  const realtime = process.env.MODE === "realtime";
+  console.log("模式：", realtime ? "即時價（手動啟動）" : "收盤價（排程）");
 
   initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
   const db = getFirestore();
   const snap = await db.collection("jizhangState").get();
+  let rt = {};
+  if (realtime) {
+    const all = new Set();
+    snap.docs.forEach(doc => {
+      const h = ((doc.data() || {}).settings || {}).hold;
+      (Array.isArray(h) ? h : []).forEach(x => { const s = String((x && x.sym) || "").toUpperCase(); if (SYM.test(s)) all.add(s); });
+    });
+    try { rt = await getRealtime([...all]); console.log("即時行情筆數：", Object.keys(rt).length, "/", all.size); }
+    catch (e) { console.log("即時行情抓不到，改用收盤價：", e.message); }
+  }
   for (const doc of snap.docs) {
     const data = doc.data() || {};
     const hold = (data.settings && Array.isArray(data.settings.hold)) ? data.settings.hold : [];
     const syms = [...new Set(hold.map(h => String((h && h.sym) || "").toUpperCase()).filter(s => SYM.test(s)))];
     if (!syms.length) continue;
-    const q = merge(data.quotes, syms, map);
-    const miss = syms.filter(s => !map[s]);
+    const src = realtime ? Object.assign({}, map, rt) : map;
+    const q = merge(data.quotes, syms, src);
+    const miss = syms.filter(s => !src[s]);
     if (q) await doc.ref.update({ quotes: q });
     console.log(`帳號 ${doc.id.slice(0, 6)}…：持股 ${syms.length} 檔，${q ? "已更新" : "沒有變動"}${miss.length ? "，找不到：" + miss.join(",") : ""}`);
   }
