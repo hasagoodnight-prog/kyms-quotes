@@ -1,9 +1,10 @@
 name: 每月月報分析
 
 on:
-  schedule:
-    # UTC 01:07 = 台灣時間 09:07，每月 1 日，分析上個月
-    - cron: "7 1 1 * *"
+  # 暫停：GitHub Models 目前沒有回應真正的 AI 結果，選好可用的服務再打開
+  # schedule:
+  #   # UTC 01:07 = 台灣時間 09:07，每月 1 日，分析上個月
+  #   - cron: "7 1 1 * *"
   workflow_dispatch:
     inputs:
       model:
@@ -35,10 +36,6 @@ jobs:
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
-      - if: ${{ inputs.list_models }}
-        run: node probe.mjs
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: node review-month.mjs
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
