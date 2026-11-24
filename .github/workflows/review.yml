@@ -1,0 +1,32 @@
+name: 每月月報分析
+
+on:
+  schedule:
+    # UTC 01:07 = 台灣時間 09:07，每月 1 日，分析上個月
+    - cron: "7 1 1 * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "要分析的月份（YYYY-MM），留空＝上個月"
+        required: false
+      force:
+        description: "已經有分析也重寫"
+        type: boolean
+        default: false
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: node review-month.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MONTH: ${{ inputs.month }}
+          FORCE: ${{ inputs.force && '1' || '' }}

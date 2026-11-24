@@ -1464,7 +1464,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, setPersistence, browserLocalPersistence, onAuthStateChanged, signInWithEmailAndPassword, signOut }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc }
+import { getFirestore, doc, getDoc, setDoc, updateDoc }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -1488,9 +1488,12 @@ window.cloudSync = {
     const snap = await getDoc(doc(fsDb, "jizhangState", window.cloudSync.uid));
     return snap.exists() ? snap.data() : null;
   },
+  /* 只覆蓋網頁自己管的欄位（設定、紀錄、股價），排程寫進去的 reviews 月報分析不會被蓋掉；文件還不存在才整份建立 */
   async setState(data){
     if(!window.cloudSync.uid) return;
-    await setDoc(doc(fsDb, "jizhangState", window.cloudSync.uid), data);
+    const ref = doc(fsDb, "jizhangState", window.cloudSync.uid);
+    try{ await updateDoc(ref, data); }
+    catch(e){ if(e && e.code === "not-found") await setDoc(ref, data); else throw e; }
   }
 };
 
@@ -2375,6 +2378,7 @@ window.addEventListener("cloud-user-ready", async () => {
       S.settings = cleanSettings(remote.settings);
       S.months = cleanMonths(remote.months);
       S.quotes = cleanQuotes(remote.quotes);
+      S.reviews = cleanReviews(remote.reviews);
       cloudOn = true;
     } else {
       const loc = readLocal();
@@ -2404,6 +2408,7 @@ window.addEventListener("cloud-import-done", (ev) => {
   S.settings = cleanSettings(data.settings);
   S.months = cleanMonths(data.months);
   S.quotes = cleanQuotes(data.quotes);
+  S.reviews = cleanReviews(data.reviews);
   cloudOn = true;
   gotSettings = gotMonths = true;
   if(!S.ready){ S.ready = true; A.intro = true; }
@@ -3093,7 +3098,7 @@ function renderRvAI(mk, r){
     (good.length ? '<h4 class="g">做得好</h4>' + li(good) : "") +
     (warn.length ? '<h4 class="w">要注意</h4>' + li(warn) : "") +
     (act.length ? '<h4 class="a">改善點</h4>' + li(act) : "") +
-    '<div class="nt">每月 1 日 Claude 會寫好這個月的詳細分析，到時會取代這一段。</div>';
+    '<div class="nt">每月 1 日 Claude 會寫好上個月的詳細分析，到時會取代這一段。</div>';
 }
 let rvFrom = null;
 function closeReview(){
