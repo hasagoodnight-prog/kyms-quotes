@@ -9,12 +9,12 @@ const API = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_MODEL = ""; // 空白＝自動用清單裡最新的 gemini-x.y-flash
 const KEY_HEADERS = () => ({ "x-goog-api-key": process.env.GEMINI_API_KEY, "content-type": "application/json" });
 
-const SAVE_GOAL = 10000; // 和網頁的「每月先存」目標一致
+const SAVE_GOAL = 10000; // 網頁「每月計畫」沒設定時的預設先存目標
 const MRE = /^\d{4}-\d{2}$/;
 
 const SYSTEM = `你是使用者的記帳助理，幫他寫每月的消費回顧。使用者在台灣，用繁體中文（台灣用語）回覆，金額用 NT$ 和千分位。
 語氣像朋友：直接、具體、不說教。每一點都要引用摘要裡的實際數字或項目，不要寫空泛的理財建議。
-重點看：每月先存 ${SAVE_GOAL} 有沒有達標、哪些分類超出預算、伙食每天平均多少、大額或不必要的花費、和上個月比的變化。
+重點看：每月先存目標（摘要裡的「每月目標」）有沒有達標、哪些分類超出預算、伙食每天平均多少、大額或不必要的花費、和上個月比的變化。
 固定支出（房租、訂閱、醫療這類）使用者已經說過不能改，不要建議砍它們。
 只回傳一個 JSON 物件，不要其他文字，格式：
 {"sum": "總結，150 字內", "good": ["做得好，1–4 點"], "warn": ["要注意，1–4 點"], "act": ["下個月具體改善，2–4 點"], "goal": "下個月一個可量化的目標，一句話"}
@@ -39,6 +39,8 @@ export function summarize(data, mk) {
   };
   const total = (arr, t) => arr.filter(e => e.t === t).reduce((s, e) => s + e.a, 0);
   const exBy = sumBy(list, "e");
+  const mp = data.settings && data.settings.mp;
+  const goal = mp && Array.isArray(mp.sav) ? mp.sav.reduce((t, q) => t + (Number(q && q.a) || 0), 0) : SAVE_GOAL;
   const expense = (cats.e || []).filter(c => !c.h && (c.b > 0 || exBy[c.id]))
     .map(c => ({ 分類: c.n, 預算: c.b || null, 實際: exBy[c.id] || 0 }));
   Object.keys(exBy).filter(id => !(cats.e || []).some(c => c.id === id))
@@ -52,7 +54,7 @@ export function summarize(data, mk) {
     記帳筆數: list.length,
     收入: { 合計: total(list, "i"), 分類: Object.entries(sumBy(list, "i")).map(([id, v]) => ({ 分類: name("i", id), 金額: v })) },
     支出: { 合計: total(list, "e"), 其中固定支出: list.filter(e => e.t === "e" && e.f).reduce((s, e) => s + e.a, 0), 各分類: expense },
-    存錢投資: { 合計: total(list, "s"), 每月目標: SAVE_GOAL, 分類: Object.entries(sumBy(list, "s")).map(([id, v]) => ({ 分類: name("s", id), 金額: v })) },
+    存錢投資: { 合計: total(list, "s"), 每月目標: goal, 分類: Object.entries(sumBy(list, "s")).map(([id, v]) => ({ 分類: name("s", id), 金額: v })) },
     伙食: food ? { 合計: exBy[food.id] || 0, 天數: daysIn(mk), 每日平均: Math.round((exBy[food.id] || 0) / daysIn(mk)), 月預算: food.b || null } : null,
     單筆500以上的非固定支出: big,
     沒寫備註的筆數: list.filter(e => !e.n).length,

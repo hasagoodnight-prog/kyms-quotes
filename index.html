@@ -427,6 +427,23 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hin label{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--ink-3);min-width:0}
 .hin input{border:1px solid var(--rule);border-radius:4px;background:var(--panel-2);padding:5px 7px;font-family:var(--mono);font-size:13px;text-align:right;color:var(--ink);min-width:0;width:100%}
 .hin input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--ring)}
+.mp{margin:2px 0 6px}
+.mp-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--rule-soft);font-size:13.5px}
+.mp-row>span:first-child{flex:1;min-width:0;color:var(--ink-2)}
+.mp-row b{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+.mp-row.tot b{color:var(--gold-ink)}
+.mp-row.neg b{color:var(--bad)}
+.mp-sub{font-size:12px;color:var(--ink-3);padding:2px 0 4px 12px;line-height:1.5}
+.mp-h{display:flex;align-items:center;gap:8px;margin:10px 0 2px;font-size:12px;color:var(--ink-3)}
+.mp-h .btn{margin-left:auto}
+.mp-ed{display:grid;grid-template-columns:minmax(0,1fr) 110px 28px;gap:6px;align-items:center;margin-top:5px}
+.mp-ed input{border:1px solid var(--rule);border-radius:4px;background:var(--panel-2);padding:6px 8px;font-size:14px;color:var(--ink);min-width:0;width:100%}
+.mp-ed input.amt{font-family:var(--mono);text-align:right}
+.mp-ed input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--ring)}
+.mp-ed .x{border:0;background:none;color:var(--ink-3);font-size:18px;cursor:pointer;padding:0;line-height:1}
+.mp-ed .x:hover{color:var(--bad)}
+.mp-one{grid-template-columns:minmax(0,1fr) 140px}
+.mp-acts{display:flex;gap:8px;margin-top:10px}
 .hmeta{margin-top:5px;font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
 .hadd{margin-top:10px;padding-top:12px;border-top:1px solid var(--rule-soft);display:flex;flex-direction:column;gap:6px}
 .hadd-row{display:grid;grid-template-columns:1.1fr 1fr 1fr auto;gap:6px}
@@ -1318,15 +1335,11 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
         <div class="panel-b"><div id="ruleList">
           <div class="rsec open" data-rs="chk"><button type="button" class="ptop" aria-expanded="true"><span class="pname"><b>本月檢查</b><span class="pdate">先存錢、預算用了多少</span></span></button>
             <div class="hbody"><div class="hbin"><div id="ruleChk"></div></div></div></div>
-          <div class="rsec" data-rs="plan"><button type="button" class="ptop" aria-expanded="false"><span class="pname"><b>每月計畫</b><span class="pdate">固定收入約 40,200 怎麼分</span></span></button>
-            <div class="hbody"><div class="hbin rtxt">
+          <div class="rsec" data-rs="plan"><button type="button" class="ptop" aria-expanded="false"><span class="pname"><b>每月計畫</b><span class="pdate" id="mpSub">固定收入怎麼分</span></span></button>
+            <div class="hbody"><div class="hbin rtxt"><div id="mpBox"></div>
               <ul>
-                <li>每月<b>必要固定支出 11,200</b>：房租 5,500、皮膚科 3,200（每月 2 次）、健身房 1,500、AI 700、音樂 300。</li>
-                <li>生活花費合計約 <b>26,950</b>（含上面的固定支出），照各分類上限花。</li>
-                <li>發薪當天先存 <b>10,000</b>：現金 7,000 + 定期定額 3,000。記成「存入」，現金選「儲蓄存款」。</li>
-                <li>剩下約 3,250 是彈性：遠行、一次性購買。超過 1,000 的東西先放進消費計畫。</li>
-                <li>錢分三個地方：<b>生活帳戶</b>、<b>緊急預備金</b>（目標 10 萬，只用在急事）、<b>投資</b>（放好幾年不動的錢）。</li>
-                <li>預備金還沒到 10 萬前，不加碼投資。</li>
+                <li>錢分三個地方：<b>生活帳戶</b>、<b>緊急預備金</b>（只用在急事）、<b>投資</b>（放好幾年不動的錢）。</li>
+                <li>預備金還沒存到目標前，不加碼投資。</li>
               </ul>
             </div></div></div>
           <div class="rsec" data-rs="idea"><button type="button" class="ptop" aria-expanded="false"><span class="pname"><b>正確觀念</b><span class="pdate">6 條</span></span></button>
@@ -2000,6 +2013,19 @@ function cleanEntry(x){
     sh: x.t === "s" && Number(x.sh) > 0 ? Number(x.sh) : 0
   };
 }
+/* 每月計畫：固定收入、必要固定支出、發薪先存（加總就是每月先存目標）、預備金目標 */
+const MP_DEF = { inc: 40200, ef: 100000,
+  fix: [["房租", 5500], ["皮膚科（每月 2 次）", 3200], ["健身房", 1500], ["AI", 700], ["音樂", 300]],
+  sav: [["現金（儲蓄存款）", 7000], ["定期定額", 3000]] };
+function cleanMP(x){
+  const amt = v => { const n = Math.round(Number(v)); return isFinite(n) && n > 0 ? Math.min(n, 1e9) : 0; };
+  const list = (src, def) => {
+    if(!Array.isArray(src)) return def.map(([n, a]) => ({ n, a }));
+    return src.slice(0, 20).map(q => ({ n: String((q && q.n) || "").slice(0, 20), a: amt(q && q.a) })).filter(q => q.n || q.a);
+  };
+  if(!x || typeof x !== "object") x = {};
+  return { inc: x.inc == null ? MP_DEF.inc : amt(x.inc), ef: x.ef == null ? MP_DEF.ef : amt(x.ef), fix: list(x.fix, MP_DEF.fix), sav: list(x.sav, MP_DEF.sav) };
+}
 function cleanSettings(x){
   const d = defaults();
   if(!x || typeof x !== "object") return d;
@@ -2025,6 +2051,7 @@ function cleanSettings(x){
     if(!q || !IDRE.test(String(q.id || "")) || !(a > 0)) return;
     out.plan.push({ id: String(q.id), n: String(q.n || "").slice(0, 30) || "未命名", a: Math.round(a), d: DRE.test(String(q.d || "")) ? String(q.d) : "" });
   });
+  out.mp = cleanMP(x.mp);
   out.hold = [];
   if(Array.isArray(x.hold)) x.hold.forEach(h => {
     if(!h || typeof h.sym !== "string") return;
@@ -2574,6 +2601,7 @@ function renderAll(){
   renderInvite();
   renderCheer();
   renderPlan();
+  renderMP();
   renderRules(r);
   $("mReview").hidden = !S.ready || S.view >= curMk() || !(S.months[S.view] && Object.keys(S.months[S.view]).length);
   maybeAutoReview();
@@ -2702,14 +2730,14 @@ function daysTo(ds){
   const t = new Date(today() + "T00:00:00"), d = new Date(ds + "T00:00:00");
   return Math.round((d - t) / 86400000);
 }
-const SAVE_GOAL = 10000;
+const saveGoal = () => { const m = S.settings.mp || cleanMP(null); return m.sav.reduce((t, q) => t + q.a, 0); };
 function renderRules(r){
   const el = $("ruleChk");
   if(!el) return;
   const cats = catsOf("e").filter(c => c.b > 0 && !c.h);
-  const sav = r.sav, ok = sav >= SAVE_GOAL;
-  let h = '<div class="rsave"><span>本月先存</span><b>' + money(sav) + "</b><span>/ " + money(SAVE_GOAL) + "</span>" +
-    (ok ? '<span class="ok">達標 ✓</span>' : '<span class="note">還差 ' + money(SAVE_GOAL - sav) + "</span>") + "</div>";
+  const sav = r.sav, ok = sav >= saveGoal();
+  let h = '<div class="rsave"><span>本月先存</span><b>' + money(sav) + "</b><span>/ " + money(saveGoal()) + "</span>" +
+    (ok ? '<span class="ok">達標 ✓</span>' : '<span class="note">還差 ' + money(saveGoal() - sav) + "</span>") + "</div>";
   let over = 0;
   h += cats.map(c => {
     const u = r.by.e[c.id] || 0, pct = u / c.b * 100, cls = pct > 100 ? "over" : pct >= 80 ? "warn" : "";
@@ -2821,6 +2849,72 @@ function bindPlan(){
     updAmtHint(); renderDateWarn();
     openSheet(true);
     toast("計畫完成！金額和備註已經幫你填好，選個分類按「記下這筆」就好。", undo);
+  });
+}
+
+/* ================= 每月計畫（可編輯） ================= */
+let MPE = null;   // 編輯中的草稿；null＝顯示模式
+function renderMP(){
+  const box = $("mpBox");
+  if(!box) return;
+  const m = S.settings.mp || (S.settings.mp = cleanMP(null));
+  $("mpSub").textContent = m.inc ? "固定收入約 " + n0(m.inc) + " 怎麼分" : "固定收入怎麼分";
+  if(MPE){
+    const ae = document.activeElement;
+    if(ae && ae.tagName === "INPUT" && box.contains(ae)) return;   // 正在輸入時不要重畫
+    const row = (k, q, i) => '<div class="mp-ed"><input type="text" data-k="' + k + '" data-i="' + i + '" data-f="n" value="' + esc(q.n) + '" placeholder="項目" aria-label="項目名稱">' +
+      '<input type="text" class="amt" inputmode="decimal" data-k="' + k + '" data-i="' + i + '" data-f="a" value="' + (q.a || "") + '" placeholder="金額" aria-label="金額">' +
+      '<button type="button" class="x" data-del="' + k + '" data-i="' + i + '" aria-label="刪除這項">×</button></div>';
+    box.innerHTML = '<div class="mp">' +
+      '<div class="mp-h">固定收入（每月）</div><div class="mp-ed mp-one"><span></span><input type="text" class="amt" inputmode="decimal" data-one="inc" value="' + (MPE.inc || "") + '" aria-label="固定收入"></div>' +
+      '<div class="mp-h">必要固定支出<button type="button" class="btn link" data-add="fix">＋ 新增一項</button></div>' + MPE.fix.map((q, i) => row("fix", q, i)).join("") +
+      '<div class="mp-h">發薪當天先存（加總＝每月先存目標）<button type="button" class="btn link" data-add="sav">＋ 新增一項</button></div>' + MPE.sav.map((q, i) => row("sav", q, i)).join("") +
+      '<div class="mp-h">緊急預備金目標</div><div class="mp-ed mp-one"><span></span><input type="text" class="amt" inputmode="decimal" data-one="ef" value="' + (MPE.ef || "") + '" aria-label="緊急預備金目標"></div>' +
+      '<div class="mp-acts"><button type="button" class="btn primary" data-mp="save">儲存</button><button type="button" class="btn" data-mp="cancel">取消</button></div></div>';
+    return;
+  }
+  const fixT = m.fix.reduce((t, q) => t + q.a, 0), savT = m.sav.reduce((t, q) => t + q.a, 0);
+  const life = catsOf("e").filter(c => !c.h).reduce((t, c) => t + (c.b || 0), 0);
+  const flex = m.inc - life - savT;
+  const items = a => a.filter(q => q.a).map(q => esc(q.n || "未命名") + " " + n0(q.a)).join("、");
+  box.innerHTML = '<div class="mp">' +
+    '<div class="mp-row"><span>固定收入</span><b>' + money(m.inc) + "</b></div>" +
+    '<div class="mp-row"><span>必要固定支出</span><b>' + money(fixT) + "</b></div>" +
+    (fixT ? '<div class="mp-sub">' + items(m.fix) + "</div>" : "") +
+    '<div class="mp-row"><span>生活花費（各分類預算加總，含固定支出）</span><b>' + money(life) + "</b></div>" +
+    '<div class="mp-row tot"><span>發薪當天先存</span><b>' + money(savT) + "</b></div>" +
+    (savT ? '<div class="mp-sub">' + items(m.sav) + "。記成「存入」。</div>" : "") +
+    '<div class="mp-row' + (flex < 0 ? " neg" : "") + '"><span>' + (flex < 0 ? "超出收入" : "剩下的彈性（遠行、一次性購買）") + "</span><b>" + money(Math.abs(flex)) + "</b></div>" +
+    (flex < 0 ? '<div class="mp-sub">預算加先存超過收入了，調低分類預算或先存金額。</div>' : '<div class="mp-sub">超過 1,000 的東西先放進消費計畫。</div>') +
+    '<div class="mp-row"><span>緊急預備金目標</span><b>' + money(m.ef) + "</b></div>" +
+    (S.readonly ? "" : '<div class="mp-acts"><button type="button" class="btn" data-mp="edit">修改金額</button></div>') + "</div>";
+}
+function bindMP(){
+  const box = $("mpBox");
+  if(!box) return;
+  box.addEventListener("click", ev => {
+    const b = ev.target.closest("button");
+    if(!b) return;
+    const act = b.getAttribute("data-mp"), add = b.getAttribute("data-add"), del = b.getAttribute("data-del");
+    if(act === "edit"){ MPE = JSON.parse(JSON.stringify(S.settings.mp || cleanMP(null))); renderMP(); const f = box.querySelector("input"); if(f) f.focus(); return; }
+    if(act === "cancel"){ MPE = null; renderMP(); return; }
+    if(act === "save"){
+      S.settings.mp = cleanMP(MPE); MPE = null;
+      document.activeElement && document.activeElement.blur && document.activeElement.blur();
+      saveSettings(); renderAll(); toast("每月計畫已更新，每月先存目標 " + money(saveGoal()) + "。");
+      return;
+    }
+    if(add && MPE){ MPE[add].push({ n: "", a: 0 }); document.activeElement.blur(); renderMP(); const ins = box.querySelectorAll('input[data-k="' + add + '"][data-f="n"]'); if(ins.length) ins[ins.length - 1].focus(); return; }
+    if(del && MPE){ MPE[del].splice(+b.getAttribute("data-i"), 1); document.activeElement.blur(); renderMP(); }
+  });
+  box.addEventListener("input", ev => {
+    const t = ev.target;
+    if(!MPE || t.tagName !== "INPUT") return;
+    const one = t.getAttribute("data-one");
+    const val = f => f === "n" ? t.value : (evalAmt(t.value).v || 0);
+    if(one){ MPE[one] = val("a"); return; }
+    const k = t.getAttribute("data-k"), i = +t.getAttribute("data-i"), f = t.getAttribute("data-f");
+    if(MPE[k] && MPE[k][i]) MPE[k][i][f] = val(f);
   });
 }
 
@@ -3077,8 +3171,8 @@ function renderRvAI(mk, r){
   }
   const good = [], warn = [], act = [];
   const save = r.sav;
-  if(save >= SAVE_GOAL) good.push("存入 " + money(save) + "，達到每月先存 " + money(SAVE_GOAL) + " 的目標。");
-  else { warn.push("只存入 " + money(save) + "，離每月 " + money(SAVE_GOAL) + " 還差 " + money(SAVE_GOAL - save) + "。"); act.push("下個月發薪當天就先轉 " + money(SAVE_GOAL) + " 出去，剩下的才拿來花。"); }
+  if(save >= saveGoal()) good.push("存入 " + money(save) + "，達到每月先存 " + money(saveGoal()) + " 的目標。");
+  else { warn.push("只存入 " + money(save) + "，離每月 " + money(saveGoal()) + " 還差 " + money(saveGoal() - save) + "。"); act.push("下個月發薪當天就先轉 " + money(saveGoal()) + " 出去，剩下的才拿來花。"); }
   const cats = catsOf("e").filter(c => c.b > 0 && !c.h);
   const over = [], okc = [];
   cats.forEach(c => { const u = r.by.e[c.id] || 0; if(u > c.b) over.push([c, u]); else if(u > 0) okc.push(c.n); });
@@ -4665,6 +4759,7 @@ function bind(){
   });
   $("cheer").addEventListener("click", nextCheer);
   bindHold();
+  bindMP();
   bindIcon();
   bindPlan();
   bindRules();
