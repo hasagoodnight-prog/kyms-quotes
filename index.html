@@ -439,6 +439,17 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hc-rng button.on{background:var(--gold-soft);color:var(--gold-ink);font-weight:600}
 .hc-chart{height:220px;position:relative}
 .hc-note{font-size:11.5px;color:var(--ink-3);margin-top:6px}
+.ar{margin:2px 0 12px;padding-bottom:10px;border-bottom:1px dashed var(--rule-soft)}
+.ar h4{margin:0 0 4px;font-size:13.5px}
+.ar .ar-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13.5px;border-bottom:1px solid var(--rule-soft)}
+.ar .ar-row b{font-family:var(--mono);font-weight:600}
+.ar .ar-row span{color:var(--ink-2);flex:1;min-width:0}
+.ar .ar-row .x{border:0;background:none;color:var(--ink-3);font-size:18px;cursor:pointer;line-height:1;padding:0 2px}
+.ar .ar-row .x:hover{color:var(--bad)}
+.ar-add{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) auto;gap:6px;margin-top:8px}
+.ar-add input,.ar-add select{border:1px solid var(--rule);border-radius:4px;background:var(--panel-2);padding:6px 8px;font-size:14px;color:var(--ink);min-width:0;width:100%}
+.ar-add input:focus,.ar-add select:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--ring)}
+#autoCat{color:var(--gold-ink)}
 .mp{margin:2px 0 6px}
 .mp-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--rule-soft);font-size:13.5px}
 .mp-row>span:first-child{flex:1;min-width:0;color:var(--ink-2)}
@@ -1144,7 +1155,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
             <div class="ferr" id="amtErr" hidden></div>
           </div>
           <div>
-            <div class="lb" id="catLbl">分類</div>
+            <div class="lb"><span id="catLbl">分類</span><span class="hint" id="autoCat"></span></div>
             <div class="chips" id="chips" role="radiogroup" aria-labelledby="catLbl"></div>
           </div>
           <div class="row2">
@@ -1383,6 +1394,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
             </div></div></div>
           <div class="rsec" data-rs="cat"><button type="button" class="ptop" aria-expanded="false"><span class="pname"><b>分類規則</b><span class="pdate">看「為了什麼」，不看買了什麼</span></span></button>
             <div class="hbody"><div class="hbin rtxt">
+              <div class="ar" id="arBox"></div>
               <p>由上往下，第一個符合就停：</p>
               <ol>
                 <li>每月固定扣的：房租、貸款、訂閱（只放數位服務）、手機月租</li>
@@ -2095,6 +2107,11 @@ function cleanSettings(x){
     out.plan.push({ id: String(q.id), n: String(q.n || "").slice(0, 30) || "未命名", a: Math.round(a), d: DRE.test(String(q.d || "")) ? String(q.d) : "" });
   });
   out.mp = cleanMP(x.mp);
+  out.ar = [];   // 自動分類規則：{ k: 關鍵字, t: 類型, c: 分類 id }
+  if(Array.isArray(x.ar)) x.ar.slice(0, 200).forEach(r => {
+    const k = String((r && r.k) || "").trim().slice(0, 20), t = r && r.t;
+    if(k && (t === "e" || t === "i" || t === "s") && typeof r.c === "string" && /^[a-z0-9]{1,24}$/.test(r.c)) out.ar.push({ k, t, c: r.c });
+  });
   out.hold = [];
   if(Array.isArray(x.hold)) x.hold.forEach(h => {
     if(!h || typeof h.sym !== "string") return;
@@ -2738,6 +2755,7 @@ function renderAll(){
   renderCheer();
   renderPlan();
   renderMP();
+  renderAR();
   renderHoldChart();
   renderRules(r);
   $("mReview").hidden = !S.ready || S.view >= curMk() || !(S.months[S.view] && Object.keys(S.months[S.view]).length);
@@ -4238,6 +4256,64 @@ function renderDateWarn(){
   } else w.hidden = true;
 }
 
+/* ================= 自動分類 ================= */
+/* 打備註時自動選分類：先看你訂的規則（備註含關鍵字），沒有就看你過去同樣備註最常用的分類。
+   你自己點過分類就不再自動改；記完一筆後重新開始。 */
+function guessCat(t, note){
+  const n = String(note || "").trim().toLowerCase();
+  if(!n) return null;
+  const ok = c => catsOf(t).some(x => x.id === c && !x.h);
+  for(const r of S.settings.ar || []){
+    if(r.t === t && n.includes(r.k.toLowerCase()) && ok(r.c)) return { c: r.c, why: "規則「" + r.k + "」" };
+  }
+  const cnt = {}, cntIn = {};
+  for(const mk in S.months) for(const id in S.months[mk]){
+    const e = S.months[mk][id];
+    if(e.t !== t || !e.n || !ok(e.c)) continue;
+    const en = e.n.trim().toLowerCase();
+    if(en === n) cnt[e.c] = (cnt[e.c] || 0) + 1;
+    else if(n.length >= 2 && en.includes(n)) cntIn[e.c] = (cntIn[e.c] || 0) + 1;
+  }
+  const best = o => Object.keys(o).sort((a, b) => o[b] - o[a])[0];
+  const c = best(cnt) || best(cntIn);
+  return c ? { c, why: "以前記過" } : null;
+}
+function autoCatFromNote(){
+  const el = $("autoCat");
+  if(S.editing || S.catManual){ el.textContent = ""; return; }
+  const g = guessCat(S.type, $("note").value);
+  if(!g){ el.textContent = ""; return; }
+  if(S.cat[S.type] !== g.c){ S.cat[S.type] = g.c; renderChips(); }
+  el.textContent = "自動：" + catName(S.type, g.c) + "（" + g.why + "）";
+}
+const TYPE_N = { e: "支出", i: "收入", s: "存入" };
+function renderAR(){
+  const box = $("arBox");
+  if(!box) return;
+  const ae = document.activeElement;
+  if(ae && box.contains(ae) && (ae.tagName === "INPUT" || ae.tagName === "SELECT")) return;   // 正在輸入時不要重畫
+  const R = S.settings.ar || [];
+  const opts = ["e", "i", "s"].map(t => '<optgroup label="' + TYPE_N[t] + '">' + catsOf(t).filter(c => !c.h).map(c => '<option value="' + t + ":" + esc(c.id) + '">' + esc(c.n) + "</option>").join("") + "</optgroup>").join("");
+  box.innerHTML = '<h4>自動分類</h4><p class="note" style="margin:0 0 6px">備註含關鍵字就自動選分類（由上往下第一個符合）。沒有規則時，會用你以前同樣備註最常選的分類。</p>' +
+    (R.length ? R.map((r, i) => '<div class="ar-row"><b>' + esc(r.k) + '</b><span>→ ' + TYPE_N[r.t] + "・" + esc(catName(r.t, r.c)) + '</span><button type="button" class="x" data-ardel="' + i + '" aria-label="刪除規則 ' + esc(r.k) + '">×</button></div>').join("") : '<div class="note">還沒有規則，例如：全聯 → 日用品、捷運 → 交通。</div>') +
+    (S.readonly ? "" : '<div class="ar-add"><input type="text" id="arK" maxlength="20" placeholder="關鍵字，例如 全聯" aria-label="關鍵字"><select id="arC" aria-label="分類">' + opts + '</select><button type="button" class="btn" id="arAdd">新增</button></div>');
+}
+function bindAR(){
+  const box = $("arBox");
+  if(!box) return;
+  box.addEventListener("click", ev => {
+    const d = ev.target.closest("[data-ardel]");
+    if(d){ S.settings.ar.splice(+d.getAttribute("data-ardel"), 1); saveSettings(); renderAR(); return; }
+    if(ev.target.id !== "arAdd") return;
+    const k = $("arK").value.trim().slice(0, 20), v = $("arC").value.split(":");
+    if(!k){ warn("先填關鍵字。"); $("arK").focus(); return; }
+    (S.settings.ar || (S.settings.ar = [])).push({ k, t: v[0], c: v[1] });
+    saveSettings(); renderAR(); toast("已加入規則：" + k + " → " + catName(v[0], v[1]));
+    const f = $("arK"); if(f) f.focus();
+  });
+  box.addEventListener("keydown", ev => { if(ev.target.id === "arK" && ev.key === "Enter"){ ev.preventDefault(); $("arAdd").click(); } });
+}
+
 /* ================= 表單 ================= */
 function renderChips(){
   const t = S.type, ed = S.editing;
@@ -4341,6 +4417,7 @@ function endEdit(silent){
   $("entry").classList.remove("editing");
   $("amt").value = "";
   $("note").value = "";
+  S.catManual = false; $("autoCat").textContent = "";
   $("fixed").checked = false;
   $("date").value = S.filter.day || today();
   disarm();
@@ -4417,6 +4494,7 @@ function onSubmit(ev){
   if(putEntries([{ mk, id, e }])){
     $("amt").value = "";
     $("note").value = "";
+    S.catManual = false; $("autoCat").textContent = "";
     $("fixed").checked = false;
     updAmtHint();
     btnFlash(DONE[e.t]);
@@ -4667,11 +4745,12 @@ function bind(){
   $("entry").addEventListener("submit", onSubmit);
   $("entry").addEventListener("change", ev => {
     const el = ev.target;
-    if(el.name === "type"){ S.type = el.value; renderChips(); syncTrade(); }
-    else if(el.name === "cat") S.cat[S.type] = el.value;
+    if(el.name === "type"){ S.type = el.value; renderChips(); syncTrade(); autoCatFromNote(); }
+    else if(el.name === "cat"){ S.cat[S.type] = el.value; S.catManual = true; $("autoCat").textContent = ""; }
     else if(el.id === "date") renderDateWarn();
   });
   $("date").addEventListener("input", renderDateWarn);
+  $("note").addEventListener("input", autoCatFromNote);
   $("amt").addEventListener("input", () => { updAmtHint(); syncTrade(); });
   $("tSh").addEventListener("input", syncTrade);
   $("amt").addEventListener("blur", () => {
@@ -4977,6 +5056,7 @@ function bind(){
   $("cheer").addEventListener("click", nextCheer);
   bindHold();
   bindHoldChart();
+  bindAR();
   bindMP();
   bindIcon();
   bindPlan();
