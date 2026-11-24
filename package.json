@@ -3,9 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node update-quotes.mjs"
+    "start": "node update-quotes.mjs",
+    "test": "node --test tests/unit.test.mjs && playwright test"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "echarts": "6.1.0",
+    "lightweight-charts": "5.0.9"
   }
 }

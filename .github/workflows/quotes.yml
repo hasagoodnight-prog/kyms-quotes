@@ -21,7 +21,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --omit=dev --no-audit --no-fund
       # 公開 repo 連續 60 天沒有任何活動，GitHub 會自動停用排程；超過 45 天沒 commit 就推一個空 commit
       - name: keepalive
         if: github.event_name == 'schedule'

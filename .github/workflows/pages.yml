@@ -1,0 +1,51 @@
+name: 測試並發布網站
+
+# 每次推上 main：先跑自動測試，全部通過才發布到 GitHub Pages；失敗就不發布，網站維持上一版
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: 股價排程的計算測試
+        run: node --test tests/unit.test.mjs
+      - run: npx playwright install --with-deps chromium
+      - name: 網頁功能測試
+        run: npx playwright test
+
+  deploy:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: 只放網站需要的檔案
+        run: |
+          mkdir _site
+          cp -r index.html sw.js manifest.json icons .nojekyll _site/
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v5
