@@ -99,6 +99,95 @@ export function plSnapshot(hold, px) {
   return { mk: d.slice(0, 7), v: { pl: Math.round(mv - cost), mv: Math.round(mv), cost: Math.round(cost), d } };
 }
 
+// ===== 歷史收盤價（持股走勢圖、補齊過去月份的浮動盈虧） =====
+const HIST_KEEP = 400;          // 每檔最多保留幾個交易日
+const HIST_MONTHS = 12;         // 第一次補資料往回抓幾個月
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 證交所／櫃買中心的「個股日成交資訊」表格：找出 [日期, …, 收盤價(第 7 欄)] 的列
+export function parseDayRows(rows) {
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!Array.isArray(r) || r.length < 7) continue;
+    const d = toDate(r[0]), c = num(r[6]);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && c > 0) out.push([d, c]);
+  }
+  return out;
+}
+
+// 抓某檔某個月每天的收盤價；先試上市（證交所），沒有再試上櫃（櫃買中心）
+async function fetchMonth(sym, mk) {
+  const ymd = mk.replace("-", "") + "01";
+  const tries = [
+    async () => { const d = await getJson(`https://www.twse.com.tw/rwd/zh/afterTrading/STOCK_DAY?date=${ymd}&stockNo=${sym}&response=json`); return parseDayRows(d.data || (d.tables && d.tables[0] && d.tables[0].data)); },
+    async () => { const d = await getJson(`https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingStock?code=${sym}&date=${mk.replace("-", "/")}/01&response=json`); return parseDayRows((d.tables && d.tables[0] && d.tables[0].data) || d.aaData || d.data); },
+  ];
+  for (const t of tries) {
+    try { const rows = await t(); if (rows.length) return rows; } catch (e) {}
+    await sleep(800);
+  }
+  return [];
+}
+
+const addMonth = (mk, n) => { const d = new Date(Date.UTC(+mk.slice(0, 4), +mk.slice(5, 7) - 1 + n, 1)); return d.toISOString().slice(0, 7); };
+
+// 合併、去重、排序、只留最近 HIST_KEEP 天
+export function mergeSeries(a, b) {
+  const m = new Map();
+  for (const [d, c] of [...(a || []), ...(b || [])]) if (d && c > 0) m.set(d, c);
+  return [...m.entries()].sort((x, y) => x[0] < y[0] ? -1 : 1).slice(-HIST_KEEP);
+}
+
+// Firestore 不能存巢狀陣列，存成 { d: [...日期], c: [...收盤] }
+const packSeries = s => ({ d: s.map(x => x[0]), c: s.map(x => x[1]) });
+const unpackSeries = o => o && Array.isArray(o.d) && Array.isArray(o.c) ? o.d.map((d, i) => [d, Number(o.c[i])]) : [];
+
+// 某個月底當時的持股：存入紀錄有代號和股數的，照紀錄累加；目前持股比紀錄多出來的部分，當作一開始就有
+export function holdingsAt(data, mk) {
+  const hold = (data.settings && Array.isArray(data.settings.hold)) ? data.settings.hold : [];
+  const buys = {};
+  for (const [m, tx] of Object.entries(data.months || {})) {
+    for (const e of Object.values(tx || {})) {
+      if (!e || e.t !== "s" || !e.sym || !(Number(e.sh) > 0)) continue;
+      const s = String(e.sym).toUpperCase();
+      (buys[s] = buys[s] || []).push({ mk: m, sh: Number(e.sh), a: Number(e.a) || 0 });
+    }
+  }
+  const out = [];
+  for (const h of hold) {
+    const s = String((h && h.sym) || "").toUpperCase(), list = buys[s] || [];
+    const allSh = list.reduce((t, b) => t + b.sh, 0), allA = list.reduce((t, b) => t + b.a, 0);
+    const preSh = Math.max(0, (Number(h.sh) || 0) - allSh), preCost = Math.max(0, (Number(h.sh) || 0) * (Number(h.cost) || 0) - allA);
+    const upto = list.filter(b => b.mk <= mk);
+    const sh = preSh + upto.reduce((t, b) => t + b.sh, 0), cost = preCost + upto.reduce((t, b) => t + b.a, 0);
+    if (sh > 0) out.push({ sym: s, sh, cost });
+  }
+  return out;
+}
+
+// 用歷史收盤價補過去月份的月底浮動盈虧（只補沒有快照的月份）
+export function backfillPlh(data, series, curMk) {
+  const months = Object.keys(data.months || {}).filter(m => Object.keys(data.months[m] || {}).length).sort();
+  if (!months.length) return {};
+  const out = {}, have = data.plh || {};
+  for (let mk = months[0] < addMonth(curMk, -HIST_MONTHS) ? addMonth(curMk, -HIST_MONTHS) : months[0]; mk < curMk; mk = addMonth(mk, 1)) {
+    if (have[mk]) continue;
+    const end = mk + "-31";
+    let mv = 0, cost = 0, d = "", ok = true;
+    const hs = holdingsAt(data, mk);
+    if (!hs.length) continue;
+    for (const h of hs) {
+      const pts = (series[h.sym] || []).filter(p => p[0] <= end && p[0] >= mk + "-01");
+      if (!pts.length) { ok = false; break; }
+      const last = pts[pts.length - 1];
+      mv += h.sh * last[1]; cost += h.cost;
+      if (last[0] > d) d = last[0];
+    }
+    if (ok) out[mk] = { pl: Math.round(mv - cost), mv: Math.round(mv), cost: Math.round(cost), d, est: 1 };
+  }
+  return out;
+}
+
 // 把收盤資料合併進某個帳號原本的 quotes；沒變就回傳 null
 export function merge(oldQuotes, syms, map) {
   const q = { px: { ...((oldQuotes && oldQuotes.px) || {}) }, at: String((oldQuotes && oldQuotes.at) || "") };
@@ -127,6 +216,7 @@ async function main() {
   const map = Object.assign({}, b.status === "fulfilled" ? parse(b.value) : {}, a.status === "fulfilled" ? parse(a.value) : {});
   console.log("收盤資料筆數：", Object.keys(map).length);
   const realtime = process.env.MODE === "realtime";
+  const thisMk = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 7);
   console.log("模式：", realtime ? "即時價（手動啟動）" : "收盤價（排程）");
 
   initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
@@ -156,8 +246,29 @@ async function main() {
     if (q && snapChanged) await doc.ref.update("quotes", q, new FieldPath("plh", snapQ.mk), snapQ.v);
     else if (q) await doc.ref.update({ quotes: q });
     else if (snapChanged) await doc.ref.update(new FieldPath("plh", snapQ.mk), snapQ.v);
-    if (snapQ) console.log(`  ${snapQ.mk} 浮動盈虧快照：${snapQ.v.pl}`);
-    console.log(`帳號 ${doc.id.slice(0, 6)}…：持股 ${syms.length} 檔，${q ? "已更新" : "沒有變動"}${miss.length ? "，找不到：" + miss.join(",") : ""}`);
+    // 走勢圖用的歷史收盤價：資料太少就往回補 HIST_MONTHS 個月，之後每天加上最新的收盤
+    const series = {}, phUpd = {};
+    for (const s of syms) {
+      let cur = unpackSeries(data.ph && data.ph[s]);
+      if (cur.length < 20) {
+        let got = [];
+        for (let k = HIST_MONTHS; k >= 0; k--) got = got.concat(await fetchMonth(s, addMonth(thisMk, -k)));
+        console.log(`  補歷史收盤價：${got.length} 天`);
+        cur = mergeSeries(cur, got);
+      }
+      const today = map[s];
+      if (today && today.d) cur = mergeSeries(cur, [[today.d, today.p]]);
+      series[s] = cur;
+      const before = data.ph && data.ph[s];
+      if (!before || before.d.length !== cur.length || before.d[before.d.length - 1] !== (cur[cur.length - 1] || [])[0]) phUpd[s] = packSeries(cur);
+    }
+    const back = backfillPlh(data, series, thisMk);
+    const upd = [];
+    for (const s in phUpd) upd.push(new FieldPath("ph", s), phUpd[s]);
+    for (const mk in back) upd.push(new FieldPath("plh", mk), back[mk]);
+    if (upd.length) await doc.ref.update(...upd);
+    if (Object.keys(back).length) console.log(`  補上 ${Object.keys(back).length} 個月的月底浮動盈虧（估算）`);
+    console.log(`帳號 ${doc.id.slice(0, 6)}…：持股 ${syms.length} 檔，${q ? "已更新" : "沒有變動"}${miss.length ? "，" + miss.length + " 檔找不到價格" : ""}`);
   }
 }
 

@@ -427,6 +427,18 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hin label{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--ink-3);min-width:0}
 .hin input{border:1px solid var(--rule);border-radius:4px;background:var(--panel-2);padding:5px 7px;font-family:var(--mono);font-size:13px;text-align:right;color:var(--ink);min-width:0;width:100%}
 .hin input:focus{outline:none;border-color:var(--focus);box-shadow:0 0 0 2px var(--ring)}
+.hchart{margin-top:12px;padding-top:10px;border-top:1px solid var(--rule-soft)}
+.hc-h{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-bottom:8px}
+.hc-h b{font-size:13.5px;color:var(--ink)}
+.hc-tabs{display:flex;flex-wrap:wrap;gap:6px}
+.hc-tabs button{border:1px solid var(--rule);background:var(--panel);color:var(--ink-2);border-radius:999px;padding:2px 10px;font-family:var(--mono);font-size:12.5px;cursor:pointer}
+.hc-tabs button.on{border-color:var(--gold-line);background:var(--gold-soft);color:var(--gold-ink);font-weight:600}
+.hc-rng{margin-left:auto;display:flex;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.hc-rng button{border:0;background:var(--panel);color:var(--ink-2);padding:3px 9px;font-size:12px;cursor:pointer}
+.hc-rng button+button{border-left:1px solid var(--rule)}
+.hc-rng button.on{background:var(--gold-soft);color:var(--gold-ink);font-weight:600}
+.hc-chart{height:220px;position:relative}
+.hc-note{font-size:11.5px;color:var(--ink-3);margin-top:6px}
 .mp{margin:2px 0 6px}
 .mp-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--rule-soft);font-size:13.5px}
 .mp-row>span:first-child{flex:1;min-width:0;color:var(--ink-2)}
@@ -1182,6 +1194,12 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
         <div class="panel-b">
           <div class="hsum" id="hSum"></div>
           <div id="hList"></div>
+          <div class="hchart" id="hcBox" hidden>
+            <div class="hc-h"><b>走勢</b><div class="hc-tabs" id="hcTabs" role="tablist" aria-label="選擇持股"></div>
+              <div class="hc-rng" id="hcRng" role="group" aria-label="期間"><button type="button" data-r="3">3 個月</button><button type="button" data-r="6" class="on">6 個月</button><button type="button" data-r="12">1 年</button></div></div>
+            <div id="hcChart" class="hc-chart"></div>
+            <div class="hc-note" id="hcNote"></div>
+          </div>
           <details class="quiet hadd-d"><summary>新增持股</summary>
           <form class="hadd" id="hAdd" autocomplete="off">
             <div class="hadd-row">
@@ -2121,7 +2139,19 @@ function cleanPlh(x){
   const out = {};
   if(x && typeof x === "object") for(const mk in x){
     const q = x[mk], pl = Number(q && q.pl);
-    if(MRE.test(mk) && isFinite(pl)) out[mk] = { pl: Math.round(pl), mv: Math.round(Number(q.mv) || 0), cost: Math.round(Number(q.cost) || 0), d: String(q.d || "").slice(0, 10) };
+    if(MRE.test(mk) && isFinite(pl)) out[mk] = { pl: Math.round(pl), mv: Math.round(Number(q.mv) || 0), cost: Math.round(Number(q.cost) || 0), d: String(q.d || "").slice(0, 10), est: q.est ? 1 : 0 };
+  }
+  return out;
+}
+S.ph = {};    // 持股歷史收盤價（股價排程寫入）：{ "00919": [{ time: "2026-10-01", value: 22.1 }, …] }
+function cleanPh(x){
+  const out = {};
+  if(x && typeof x === "object") for(const k in x){
+    const o = x[k];
+    if(!/^[0-9A-Z.]{1,10}$/.test(k) || !o || !Array.isArray(o.d) || !Array.isArray(o.c)) continue;
+    const a = [];
+    o.d.forEach((d, i) => { const v = Number(o.c[i]); if(DRE.test(String(d)) && v > 0) a.push({ time: String(d), value: v }); });
+    if(a.length) out[k] = a;
   }
   return out;
 }
@@ -2417,6 +2447,7 @@ window.addEventListener("cloud-user-ready", async () => {
       S.quotes = cleanQuotes(remote.quotes);
       S.reviews = cleanReviews(remote.reviews);
       S.plh = cleanPlh(remote.plh);
+      S.ph = cleanPh(remote.ph);
       cloudOn = true;
     } else {
       const loc = readLocal();
@@ -2612,6 +2643,7 @@ function renderAll(){
   renderCheer();
   renderPlan();
   renderMP();
+  renderHoldChart();
   renderRules(r);
   $("mReview").hidden = !S.ready || S.view >= curMk() || !(S.months[S.view] && Object.keys(S.months[S.view]).length);
   maybeAutoReview();
@@ -2926,6 +2958,76 @@ function bindMP(){
     const k = t.getAttribute("data-k"), i = +t.getAttribute("data-i"), f = t.getAttribute("data-f");
     if(MPE[k] && MPE[k][i]) MPE[k][i][f] = val(f);
   });
+}
+
+/* ================= 持股走勢圖（開源 TradingView lightweight-charts） ================= */
+let LWC = null, HC = { key: "", chart: null, sym: "", r: 6 };
+function loadLWC(){
+  if(window.LightweightCharts) return Promise.resolve(window.LightweightCharts);
+  if(LWC) return LWC;
+  LWC = new Promise((ok, no) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/lightweight-charts@5.0.9/dist/lightweight-charts.standalone.production.js";
+    sc.onload = () => ok(window.LightweightCharts);
+    sc.onerror = () => { LWC = null; no(new Error("load")); };
+    document.head.appendChild(sc);
+  });
+  return LWC;
+}
+function renderHoldChart(){
+  const box = $("hcBox");
+  if(!box) return;
+  const H = (S.settings.hold || []).filter(h => S.ph[h.sym] && S.ph[h.sym].length > 1);
+  if(!H.length){ box.hidden = true; return; }
+  box.hidden = false;
+  if(!H.some(h => h.sym === HC.sym)) HC.sym = H[0].sym;
+  $("hcTabs").innerHTML = H.length > 1 ? H.map(h => '<button type="button" role="tab" data-sym="' + esc(h.sym) + '" aria-selected="' + (h.sym === HC.sym) + '"' + (h.sym === HC.sym ? ' class="on"' : "") + ">" + esc(h.sym) + "</button>").join("") : '<span class="note">' + esc(H[0].sym) + "</span>";
+  [...$("hcRng").children].forEach(b => b.classList.toggle("on", +b.getAttribute("data-r") === HC.r));
+  const h = H.find(x => x.sym === HC.sym), all = S.ph[HC.sym];
+  const q = S.quotes.px[HC.sym];
+  const pts = all.slice();
+  if(q && q.d && q.p > 0 && (!pts.length || pts[pts.length - 1].time < q.d)) pts.push({ time: q.d, value: q.p });   // 接上今天的即時價
+  const from = new Date(); from.setMonth(from.getMonth() - HC.r);
+  const since = from.getFullYear() + "-" + pad(from.getMonth() + 1) + "-" + pad(from.getDate());
+  let data = pts.filter(p => p.time >= since);
+  if(data.length < 2) data = pts.slice(-60);   // 這段期間資料太少，就顯示最近的資料
+  const key = [HC.sym, HC.r, data.length, data.length ? data[data.length - 1].time + ":" + data[data.length - 1].value : "", h.cost, document.documentElement.getAttribute("data-theme") || ""].join("|");
+  const first = data[0], last = data[data.length - 1];
+  $("hcNote").textContent = first && last ? HC.sym + "　" + first.time.slice(5).replace("-", "/") + " " + first.value + " → " + last.time.slice(5).replace("-", "/") + " " + last.value +
+    "（" + (last.value >= first.value ? "+" : "") + ((last.value / first.value - 1) * 100).toFixed(1) + "%）" + (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
+  if(key === HC.key && HC.chart) return;
+  HC.key = key;
+  loadLWC().then(L => {
+    const el = $("hcChart");
+    if(HC.chart){ HC.chart.remove(); HC.chart = null; }
+    const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+    const chart = L.createChart(el, {
+      autoSize: true,
+      layout: { background: { type: "solid", color: "transparent" }, textColor: v("--ink-3"), fontFamily: v("--mono") || "monospace", fontSize: 11 },
+      grid: { vertLines: { visible: false }, horzLines: { color: v("--rule-soft") } },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false },
+      localization: { locale: "zh-TW" },
+      handleScroll: false, handleScale: false,
+    });
+    const up = last.value >= (h.cost || first.value);
+    const col = up ? v("--bad") : v("--good");   // 台股習慣：漲紅跌綠
+    const ser = chart.addSeries(L.AreaSeries, { lineColor: col, topColor: col + "40", bottomColor: col + "05", lineWidth: 2, priceLineVisible: false });
+    ser.setData(data);
+    if(h.cost > 0) ser.createPriceLine({ price: h.cost, color: v("--ink-3"), lineWidth: 1, lineStyle: L.LineStyle.Dashed, axisLabelVisible: true, title: "成本" });
+    chart.timeScale().fitContent();
+    HC.chart = chart;
+    /* 分頁切換前圖是 0 寬；尺寸一變就重新鋪滿 */
+    if(!HC.ro && "ResizeObserver" in window){
+      let w = 0;
+      HC.ro = new ResizeObserver(es => { const nw = Math.round(es[0].contentRect.width); if(nw && nw !== w && HC.chart){ w = nw; requestAnimationFrame(() => HC.chart && HC.chart.timeScale().fitContent()); } });
+      HC.ro.observe(el);
+    }
+  }).catch(e => { console.error("hold chart", e); $("hcNote").textContent = "走勢圖載入失敗，晚點再試。"; HC.key = ""; });
+}
+function bindHoldChart(){
+  $("hcTabs").addEventListener("click", ev => { const b = ev.target.closest("button[data-sym]"); if(!b) return; HC.sym = b.getAttribute("data-sym"); renderHoldChart(); });
+  $("hcRng").addEventListener("click", ev => { const b = ev.target.closest("button[data-r]"); if(!b) return; HC.r = +b.getAttribute("data-r"); renderHoldChart(); });
 }
 
 /* ================= 持股與浮動盈虧 ================= */
@@ -4012,7 +4114,7 @@ function bindTrend(){
         .map(([k, v, c]) => '<div class="tr"><span' + (c ? ' style="color:' + c + '"' : "") + ">" + k + "</span><b>" + (PRIV && k === "月底累積資產" ? "••••••" : money(v)) + "</b></div>").join("");
       if(d.inc > 0) html += '<div class="tr"><span>儲蓄率</span><b>' + Math.round(d.net / d.inc * 100) + "%</b></div>";
     }
-    if(d.pl != null) html += '<div class="tr"><span>' + (d.mk === curMk() ? "其中浮動盈虧（現在）" : "其中月底浮動盈虧") + "</span><b>" + (PRIV ? "••••••" : sgn(d.pl)) + "</b></div>";
+    if(d.pl != null) html += '<div class="tr"><span>' + (d.mk === curMk() ? "其中浮動盈虧（現在）" : "其中月底浮動盈虧" + (S.plh[d.mk] && S.plh[d.mk].est ? "（估算）" : "")) + "</span><b>" + (PRIV ? "••••••" : sgn(d.pl)) + "</b></div>";
     tip.innerHTML = html;
     tip.classList.add("on");
     const tw = tip.offsetWidth;
@@ -4778,6 +4880,7 @@ function bind(){
   });
   $("cheer").addEventListener("click", nextCheer);
   bindHold();
+  bindHoldChart();
   bindMP();
   bindIcon();
   bindPlan();
