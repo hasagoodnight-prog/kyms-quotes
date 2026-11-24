@@ -458,6 +458,8 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .ro label small.pos{color:var(--good)}
 .ro label small.neg{color:var(--bad)}
 .rbud .ro-c{font-size:11px;color:var(--ink-3);margin-left:4px}
+.flow-chart{height:360px;width:100%}
+@media (max-width:560px){.flow-chart{height:420px}}
 .mp{margin:2px 0 6px}
 .mp-row{display:flex;align-items:baseline;gap:8px;padding:5px 0;border-bottom:1px dashed var(--rule-soft);font-size:13.5px}
 .mp-row>span:first-child{flex:1;min-width:0;color:var(--ink-2)}
@@ -1471,6 +1473,13 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
         </div>
         <div class="note chartnote">點長條可以直接跳到那個月。</div>
       </section>
+       <section class="panel" data-m="stats" id="flowPanel">
+        <div class="panel-h"><h2>錢的流向</h2><span class="en">Flow</span><div class="tools"><span class="note" id="flowMk"></span></div></div>
+        <div class="panel-b">
+          <div id="flowChart" class="flow-chart" role="img" aria-label="這個月收入流向各支出分類與存款"></div>
+          <div class="note" id="flowNote"></div>
+        </div>
+       </section>
     </div>
   </div>
 
@@ -2768,6 +2777,7 @@ function renderAll(){
   renderMP();
   renderAR();
   renderRO();
+  renderFlow();
   renderHoldChart();
   renderRules(r);
   $("mReview").hidden = !S.ready || S.view >= curMk() || !(S.months[S.view] && Object.keys(S.months[S.view]).length);
@@ -3195,6 +3205,78 @@ function renderHoldChart(){
 function bindHoldChart(){
   $("hcTabs").addEventListener("click", ev => { const b = ev.target.closest("button[data-sym]"); if(!b) return; HC.sym = b.getAttribute("data-sym"); renderHoldChart(); });
   $("hcRng").addEventListener("click", ev => { const b = ev.target.closest("button[data-r]"); if(!b) return; HC.r = +b.getAttribute("data-r"); renderHoldChart(); });
+}
+
+/* ================= 錢的流向（開源 Apache ECharts 桑基圖） ================= */
+let ECL = null, FLOW = { chart: null, key: "", seen: false };
+function loadEC(){
+  if(window.echarts) return Promise.resolve(window.echarts);
+  if(ECL) return ECL;
+  ECL = new Promise((ok, no) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/echarts@6.1.0/dist/echarts.min.js";
+    sc.onload = () => ok(window.echarts);
+    sc.onerror = () => { ECL = null; no(new Error("load")); };
+    document.head.appendChild(sc);
+  });
+  return ECL;
+}
+/* 收入分類 → 收入 → 各支出分類／存入投資／結餘；花的比賺的多時，多出來的由「動用存款」補 */
+function flowData(mk){
+  const r = summarize(mk), nodes = [], links = [], lbl = {}, col = {};
+  const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+  const node = (id, name, color) => { nodes.push({ name: id, itemStyle: { color } }); lbl[id] = name; };
+  const inc = r.inc, out = r.exp + r.sav + r.dep;   // 存入包含押金（by.s 裡也有）
+  if(!inc && !out) return null;
+  node("IN", "收入", v("--blue"));
+  Object.keys(r.by.i).sort((a, b) => r.by.i[b] - r.by.i[a]).forEach(id => { node("i:" + id, catName("i", id), v("--blue-ink")); links.push({ source: "i:" + id, target: "IN", value: r.by.i[id] }); });
+  if(out > inc){ node("DRAW", "動用存款", v("--ink-3")); links.push({ source: "DRAW", target: "IN", value: out - inc }); }
+  Object.keys(r.by.e).sort((a, b) => r.by.e[b] - r.by.e[a]).forEach(id => { node("e:" + id, catName("e", id), v("--exp")); links.push({ source: "IN", target: "e:" + id, value: r.by.e[id] }); });
+  Object.keys(r.by.s).sort((a, b) => r.by.s[b] - r.by.s[a]).forEach(id => { node("s:" + id, catName("s", id), v("--gold")); links.push({ source: "IN", target: "s:" + id, value: r.by.s[id] }); });
+  if(inc > out){ node("LEFT", "結餘", v("--good")); links.push({ source: "IN", target: "LEFT", value: inc - out }); }
+  return { nodes, links: links.filter(l => l.value > 0), lbl, inc, exp: r.exp, sav: r.sav + r.dep };
+}
+function renderFlow(){
+  const panel = $("flowPanel");
+  if(!panel || !S.ready) return;
+  const mk = S.view, d = flowData(mk);
+  $("flowMk").textContent = mkLabel(mk);
+  if(!d){ $("flowNote").textContent = "這個月還沒有收入或支出紀錄。"; if(FLOW.chart){ FLOW.chart.dispose(); FLOW.chart = null; } FLOW.key = ""; $("flowChart").hidden = true; return; }
+  $("flowChart").hidden = false;
+  $("flowNote").textContent = PRIV ? "隱藏金額中，只顯示比例。" : "收入 " + money(d.inc) + " → 支出 " + money(d.exp) + "、存入 " + money(d.sav) + "。滑過（或點）線條看金額。";
+  if(!FLOW.seen) return;   // 還沒捲到這裡，先不載入圖表程式庫
+  const key = JSON.stringify([mk, d.links, PRIV, document.documentElement.getAttribute("data-theme") || ""]);
+  if(key === FLOW.key && FLOW.chart) return;
+  FLOW.key = key;
+  loadEC().then(ec => {
+    const el = $("flowChart");
+    if(!FLOW.chart) FLOW.chart = ec.init(el, null, { renderer: "svg" });
+    const cs = getComputedStyle(document.documentElement), v = n => cs.getPropertyValue(n).trim();
+    const amt = x => PRIV ? "" : " " + n0(x);
+    const narrow = el.clientWidth < 480;
+    FLOW.chart.setOption({
+      animationDuration: motion() ? 600 : 0,
+      tooltip: { trigger: "item", confine: true, formatter: p => p.dataType === "edge"
+        ? esc(d.lbl[p.data.source]) + " → " + esc(d.lbl[p.data.target]) + (PRIV ? "" : "<br><b>" + money(p.data.value) + "</b>")
+        : esc(d.lbl[p.name]) + (PRIV ? "" : "<br><b>" + money(p.value) + "</b>") },
+      series: [{
+        type: "sankey", data: d.nodes, links: d.links, nodeAlign: "justify", draggable: false,
+        left: 4, right: narrow ? 104 : 120, top: 6, bottom: 10, nodeGap: narrow ? 6 : 9, nodeWidth: narrow ? 10 : 14,
+        emphasis: { focus: "adjacency" },
+        lineStyle: { color: "gradient", opacity: .35, curveness: .5 },
+        label: { color: v("--ink"), fontFamily: v("--sans"), fontSize: narrow ? 11 : 12.5, formatter: p => d.lbl[p.name] + amt(p.value) },
+      }],
+    }, true);
+    FLOW.chart.resize();
+  }).catch(() => { $("flowNote").textContent = "流向圖載入失敗，晚點再試。"; FLOW.key = ""; });
+}
+function bindFlow(){
+  const el = $("flowPanel");
+  if(!el) return;
+  const go = () => { if(!FLOW.seen){ FLOW.seen = true; renderFlow(); } };
+  if("IntersectionObserver" in window) new IntersectionObserver(es => { if(es.some(e => e.isIntersecting)) go(); }, { rootMargin: "200px" }).observe(el);
+  else go();
+  if("ResizeObserver" in window) new ResizeObserver(() => { if(FLOW.chart){ FLOW.chart.resize(); FLOW.key = ""; renderFlow(); } }).observe($("flowChart"));
 }
 
 /* ================= 持股與浮動盈虧 ================= */
@@ -5111,6 +5193,7 @@ function bind(){
   bindHoldChart();
   bindAR();
   bindRO();
+  bindFlow();
   bindMP();
   bindIcon();
   bindPlan();
