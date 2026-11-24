@@ -98,12 +98,25 @@ async function writeReview(model, summary) {
   return cleanReview(data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content);
 }
 
-async function listModels() {
-  const res = await fetch(CATALOG, { headers: GH_HEADERS() });
-  if (!res.ok) throw new Error("讀不到模型清單：" + res.status);
-  const list = await res.json();
-  console.log("可以用的模型（填在 model 欄位的是 id）：");
-  for (const m of list) console.log(`- ${m.id}　${m.name || ""}　額度等級：${m.rate_limit_tier || "?"}`);
+async function listModels(model) {
+  for (const accept of ["application/json", "application/vnd.github+json"]) {
+    const res = await fetch(CATALOG, { headers: { ...GH_HEADERS(), accept } });
+    const txt = await res.text();
+    let list = null;
+    try { list = JSON.parse(txt); } catch (e) {}
+    if (Array.isArray(list)) {
+      console.log("可以用的模型（填在 model 欄位的是 id）：");
+      for (const m of list) console.log(`- ${m.id}　${m.name || ""}　額度等級：${m.rate_limit_tier || "?"}`);
+      break;
+    }
+    console.log(`模型清單（accept=${accept}）回應 ${res.status}：${txt.slice(0, 200)}`);
+  }
+  // 順便試打一次，確認這個模型能用
+  const res = await fetch(INFER, {
+    method: "POST", headers: GH_HEADERS(),
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "用繁體中文回一句：測試成功" }], max_tokens: 50 }),
+  });
+  console.log(`試打 ${model}：${res.status} ${(await res.text()).slice(0, 300)}`);
 }
 
 async function main() {
@@ -112,7 +125,7 @@ async function main() {
   const mk = MRE.test(process.env.MONTH || "") ? process.env.MONTH : prevMonth(thisMk);
   const force = process.env.FORCE === "1";
   const model = (process.env.MODEL || "").trim() || DEFAULT_MODEL;
-  if (process.env.LIST_MODELS === "1") { await listModels(); return; }
+  if (process.env.LIST_MODELS === "1") { await listModels(model); return; }
   console.log("分析月份：", mk, force ? "（強制重寫）" : "", "模型：", model);
 
   initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
