@@ -5,5 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: |
-          curl -sS -m 20 -i -H "origin: https://hasagoodnight-prog.github.io" "https://kyms-live.hasagoodnight.workers.dev/?s=00919,T00" | sed -n '1p;/access-control-allow-origin/Ip;/content-type/Ip;$p'
-          echo; curl -sS -m 20 "https://kyms-live.hasagoodnight.workers.dev/?s=%3Cx%3E"
+          for i in $(seq 1 10); do
+            if out=$(curl -sS -m 20 -i -H "origin: https://hasagoodnight-prog.github.io" "https://kyms-live.hasagoodnight.workers.dev/?s=00919,T00" 2>&1); then
+              echo "try $i OK"; echo "$out" | sed -n '1p;/access-control-allow-origin/Ip;$p'; exit 0
+            fi
+            echo "try $i: $(echo "$out" | tail -1)"; sleep 30
+          done
+          exit 1
