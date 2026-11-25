@@ -97,12 +97,15 @@ test("持股走勢圖（可切換加權指數、S&P 500）與即將入帳股息"
   await page.locator("#hcBox").scrollIntoViewIfNeeded();
   await expect(page.locator("#hcChart canvas").first()).toBeVisible({ timeout: 10000 });
   await expect(page.locator("#hDiv")).toContainText("約 NT$700");
-  await expect(page.locator("#hcTabs button")).toHaveText(["00919", "加權指數", "S&P 500"]);
+  await expect(page.locator("#hcTabs button")).toHaveText(["00919", "台股加權指數", "S&P 500"]);
+  await expect(page.locator("#hcStat .chg").first()).toHaveClass(/up/);
+  await expect(page.locator("#hcStat")).toContainText("比成本");
   await page.click('#hcTabs [data-sym="SPX"]');
+  await expect(page.locator("#hcStat")).not.toContainText("比成本");
   await expect(page.locator("#hcNote")).toContainText("S&P 500");
   await expect(page.locator("#hcNote")).not.toContainText("成本");
   await page.click('#hcTabs [data-sym="TAIEX"]');
-  await expect(page.locator("#hcNote")).toContainText("加權指數");
+  await expect(page.locator("#hcNote")).toContainText("台股加權指數");
 });
 
 test("離線時顯示「已存在這台裝置」，連線後同步", async ({ page, context }) => {

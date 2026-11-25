@@ -438,6 +438,14 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hc-rng button+button{border-left:1px solid var(--rule)}
 .hc-rng button.on{background:var(--gold-soft);color:var(--gold-ink);font-weight:600}
 .hc-chart{height:220px;position:relative}
+.hc-stat{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;margin:2px 0 8px}
+.hc-stat .v{font-family:var(--mono);font-size:24px;font-weight:600;color:var(--ink);line-height:1.2;font-variant-numeric:tabular-nums}
+.hc-stat .chg{font-family:var(--mono);font-size:17px;font-weight:700;padding:2px 9px;border-radius:4px;font-variant-numeric:tabular-nums}
+.hc-stat .chg.up{color:var(--bad);background:color-mix(in srgb,var(--bad) 12%,transparent)}
+.hc-stat .chg.dn{color:var(--good);background:color-mix(in srgb,var(--good) 12%,transparent)}
+.hc-stat .chg.flat{color:var(--ink-2);background:var(--panel-2)}
+.hc-stat .lbl{font-size:12.5px;color:var(--ink-3)}
+.hc-stat .pair{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}
 .hc-note{font-size:11.5px;color:var(--ink-3);margin-top:6px}
 .ar{margin:2px 0 12px;padding-bottom:10px;border-bottom:1px dashed var(--rule-soft)}
 .ar h4{margin:0 0 4px;font-size:13.5px}
@@ -1225,6 +1233,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
           <div class="hchart" id="hcBox" hidden>
             <div class="hc-h"><b>走勢</b><div class="hc-tabs" id="hcTabs" role="tablist" aria-label="選擇持股"></div>
               <div class="hc-rng" id="hcRng" role="group" aria-label="期間"><button type="button" data-r="3">3 個月</button><button type="button" data-r="6" class="on">6 個月</button><button type="button" data-r="12">1 年</button></div></div>
+            <div class="hc-stat" id="hcStat" aria-live="polite"></div>
             <div id="hcChart" class="hc-chart"></div>
             <div class="hc-note" id="hcNote"></div>
           </div>
@@ -3180,7 +3189,7 @@ function renderHoldChart(){
   const box = $("hcBox");
   if(!box) return;
   /* 持股＋大盤指數（加權指數、S&P 500），同一張圖用分頁切換 */
-  const IDX = [{ sym: "TAIEX", label: "加權指數", idx: 1 }, { sym: "SPX", label: "S&P 500", idx: 1 }];
+  const IDX = [{ sym: "TAIEX", label: "台股加權指數", idx: 1 }, { sym: "SPX", label: "S&P 500", idx: 1 }];
   const H = (S.settings.hold || []).map(h => ({ sym: h.sym, label: h.sym, cost: h.cost })).concat(IDX)
     .filter(h => S.ph[h.sym] && S.ph[h.sym].length > 1);
   if(!H.length){ box.hidden = true; return; }
@@ -3199,8 +3208,14 @@ function renderHoldChart(){
   const key = [HC.sym, HC.r, data.length, data.length ? data[data.length - 1].time + ":" + data[data.length - 1].value : "", h.cost, document.documentElement.getAttribute("data-theme") || ""].join("|");
   const first = data[0], last = data[data.length - 1];
   const fv = x => x >= 1000 ? x.toLocaleString("en-US", { maximumFractionDigits: 2 }) : x;
+  /* 大字：最新價、這段期間漲跌幅；持股再加「比成本」 */
+  const pct = (a, b) => (a / b - 1) * 100;
+  const badge = (p, lbl) => '<span class="pair"><span class="chg ' + (p > 0.005 ? "up" : p < -0.005 ? "dn" : "flat") + '">' + (p > 0 ? "+" : p < 0 ? "−" : "") + Math.abs(p).toFixed(2) + "%</span><span class=\"lbl\">" + lbl + "</span></span>";
+  const rngLbl = { 3: "近 3 個月", 6: "近 6 個月", 12: "近 1 年" }[HC.r] || "";
+  $("hcStat").innerHTML = first && last ? '<span class="v">' + fv(last.value) + "</span>" + badge(pct(last.value, first.value), rngLbl) +
+    (h.cost > 0 ? badge(pct(last.value, h.cost), "比成本") : "") : "";
   $("hcNote").textContent = first && last ? h.label + "　" + first.time.slice(5).replace("-", "/") + " " + fv(first.value) + " → " + last.time.slice(5).replace("-", "/") + " " + fv(last.value) +
-    "（" + (last.value >= first.value ? "+" : "") + ((last.value / first.value - 1) * 100).toFixed(1) + "%）" + (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
+    (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
   if(key === HC.key && HC.chart) return;
   HC.key = key;
   loadLWC().then(L => {
