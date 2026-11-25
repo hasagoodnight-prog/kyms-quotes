@@ -86,16 +86,23 @@ test("錢的流向圖畫得出來", async ({ page }) => {
   await expect(page.locator("#flowNote")).toContainText("收入 NT$40,000");
 });
 
-test("持股走勢圖與即將入帳股息", async ({ page }) => {
+test("持股走勢圖（可切換加權指數、S&P 500）與即將入帳股息", async ({ page }) => {
   const d = [], c = [];
   for (let i = 0; i < 60; i++) { const t = new Date(Date.UTC(2026, 5, 1 + i)); d.push(t.toISOString().slice(0, 10)); c.push(+(20 + i * 0.03).toFixed(2)); }
   await openApp(page, { state: { settings: { cats: cats(), hold: [{ sym: "00919", n: "", sh: 1000, cost: 19 }] }, months: {},
-    quotes: { px: { "00919": { p: 22, d: d[59], src: "auto" } }, at: "" }, ph: { "00919": { d, c } },
+    quotes: { px: { "00919": { p: 22, d: d[59], src: "auto" } }, at: "" },
+    ph: { "00919": { d, c }, TAIEX: { d, c: c.map(x => x * 1300) }, SPX: { d, c: c.map(x => x * 330) } },
     divs: [{ sym: "00919", exd: "2099-12-16", pay: "2099-12-30", cps: 0.7, sh: 1000, gross: 700, net: 700 }] } });
   await tab(page, "stats");
   await page.locator("#hcBox").scrollIntoViewIfNeeded();
   await expect(page.locator("#hcChart canvas").first()).toBeVisible({ timeout: 10000 });
   await expect(page.locator("#hDiv")).toContainText("約 NT$700");
+  await expect(page.locator("#hcTabs button")).toHaveText(["00919", "加權指數", "S&P 500"]);
+  await page.click('#hcTabs [data-sym="SPX"]');
+  await expect(page.locator("#hcNote")).toContainText("S&P 500");
+  await expect(page.locator("#hcNote")).not.toContainText("成本");
+  await page.click('#hcTabs [data-sym="TAIEX"]');
+  await expect(page.locator("#hcNote")).toContainText("加權指數");
 });
 
 test("離線時顯示「已存在這台裝置」，連線後同步", async ({ page, context }) => {

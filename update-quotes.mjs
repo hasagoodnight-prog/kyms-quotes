@@ -129,6 +129,57 @@ async function fetchMonth(sym, mk) {
   return [];
 }
 
+// ===== 台股加權指數（證交所「發行量加權股價指數歷史資料」）：存在 ph.TAIEX，和持股一起畫走勢圖 =====
+export const INDEX_KEY = "TAIEX";
+export function parseIndexRows(d) {
+  const fields = (d && (d.fields || (d.tables && d.tables[0] && d.tables[0].fields))) || [];
+  const rows = (d && (d.data || (d.tables && d.tables[0] && d.tables[0].data))) || [];
+  let ci = fields.findIndex(f => /收盤/.test(String(f)));
+  if (ci < 0) ci = 4;   // 日期、開盤、最高、最低、收盤
+  const out = [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    if (!Array.isArray(r)) continue;
+    const dd = toDate(r[0]), v = num(r[ci]);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(dd) && v > 0) out.push([dd, v]);
+  }
+  return out;
+}
+async function fetchIndexMonth(mk) {
+  try { return parseIndexRows(await getJson(`https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date=${mk.replace("-", "")}01&response=json`)); }
+  catch (e) { return []; }
+}
+async function fetchIndexRealtime() {
+  try {
+    const res = await fetch(`${MIS}?ex_ch=tse_t00.tw&json=1&delay=0&_=${Date.now()}`, { headers: { "user-agent": "Mozilla/5.0 kyms-quotes", referer: "https://mis.twse.com.tw/stock/index.jsp" } });
+    const m = parseMis((await res.json()).msgArray);
+    const v = m.T00;
+    return v && v.d ? [v.d, v.p] : null;
+  } catch (e) { return null; }
+}
+
+// ===== 美股 S&P 500：FinMind（USStockPrice ^GSPC），抓不到改用美國聯準會 FRED；存在 ph.SPX =====
+export const SPX_KEY = "SPX";
+export function parseFred(csv) {
+  const out = [];
+  for (const line of String(csv || "").split(/\r?\n/).slice(1)) {
+    const [d, v] = line.split(",");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d) && Number(v) > 0) out.push([d, Number(v)]);
+  }
+  return out;
+}
+async function fetchSpx(since) {
+  try {
+    const d = await getJson(`${FINMIND}?dataset=USStockPrice&data_id=%5EGSPC&start_date=${since}`);
+    const rows = (d && d.data || []).map(r => [String(r.date), Number(r.Close)]).filter(r => /^\d{4}-\d{2}-\d{2}$/.test(r[0]) && r[1] > 0);
+    if (rows.length) return rows;
+  } catch (e) {}
+  try {
+    const res = await fetch("https://fred.stlouisfed.org/graph/fredgraph.csv?id=SP500", { headers: { "user-agent": "Mozilla/5.0 kyms-quotes" } });
+    if (res.ok) return parseFred(await res.text()).filter(r => r[0] >= since);
+  } catch (e) {}
+  return [];
+}
+
 const addMonth = (mk, n) => { const d = new Date(Date.UTC(+mk.slice(0, 4), +mk.slice(5, 7) - 1 + n, 1)); return d.toISOString().slice(0, 7); };
 
 // 合併、去重、排序、只留最近 HIST_KEEP 天
@@ -310,6 +361,13 @@ async function main() {
     try { rt = await getRealtime([...all]); console.log("即時行情筆數：", Object.keys(rt).length, "/", all.size); }
     catch (e) { console.log("即時行情抓不到，改用收盤價：", e.message); }
   }
+  // 加權指數：這個月的每日收盤（每次都抓）、手動啟動時再加上即時指數；完整一年歷史等帳號需要時才抓一次
+  const idxNow = mergeSeries(await fetchIndexMonth(addMonth(thisMk, -1)), await fetchIndexMonth(thisMk));
+  const idxRt = realtime ? await fetchIndexRealtime() : null;
+  let idxFull = null;
+  console.log("加權指數：本月", idxNow.length, "天", idxRt ? "＋即時" : "");
+  const spx = await fetchSpx(addMonth(thisMk, -HIST_MONTHS) + "-01");
+  console.log("S&P 500：", spx.length, "天");
   for (const doc of snap.docs) {
     const data = doc.data() || {};
     const hold = (data.settings && Array.isArray(data.settings.hold)) ? data.settings.hold : [];
@@ -339,6 +397,25 @@ async function main() {
       series[s] = cur;
       const before = data.ph && data.ph[s];
       if (!before || before.d.length !== cur.length || before.d[before.d.length - 1] !== (cur[cur.length - 1] || [])[0]) phUpd[s] = packSeries(cur);
+    }
+    {
+      let cur = unpackSeries(data.ph && data.ph[INDEX_KEY]);
+      if (cur.length < 20) {
+        if (!idxFull) {
+          idxFull = [];
+          for (let k = HIST_MONTHS; k >= 2; k--) { idxFull = idxFull.concat(await fetchIndexMonth(addMonth(thisMk, -k))); await sleep(500); }
+          console.log(`  補加權指數歷史：${idxFull.length} 天`);
+        }
+        cur = mergeSeries(cur, idxFull);
+      }
+      cur = mergeSeries(cur, idxRt ? idxNow.concat([idxRt]) : idxNow);
+      const before = data.ph && data.ph[INDEX_KEY];
+      if (cur.length && (!before || before.d.length !== cur.length || before.d[before.d.length - 1] !== cur[cur.length - 1][0] || before.c[before.c.length - 1] !== cur[cur.length - 1][1])) phUpd[INDEX_KEY] = packSeries(cur);
+    }
+    if (spx.length) {
+      const cur = mergeSeries(unpackSeries(data.ph && data.ph[SPX_KEY]), spx);
+      const before = data.ph && data.ph[SPX_KEY];
+      if (!before || before.d.length !== cur.length || before.d[before.d.length - 1] !== cur[cur.length - 1][0] || before.c[before.c.length - 1] !== cur[cur.length - 1][1]) phUpd[SPX_KEY] = packSeries(cur);
     }
     const back = backfillPlh(data, series, thisMk);
     const upd = [];

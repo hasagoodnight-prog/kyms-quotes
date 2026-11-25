@@ -3179,14 +3179,17 @@ function renderDivs(){
 function renderHoldChart(){
   const box = $("hcBox");
   if(!box) return;
-  const H = (S.settings.hold || []).filter(h => S.ph[h.sym] && S.ph[h.sym].length > 1);
+  /* 持股＋大盤指數（加權指數、S&P 500），同一張圖用分頁切換 */
+  const IDX = [{ sym: "TAIEX", label: "加權指數", idx: 1 }, { sym: "SPX", label: "S&P 500", idx: 1 }];
+  const H = (S.settings.hold || []).map(h => ({ sym: h.sym, label: h.sym, cost: h.cost })).concat(IDX)
+    .filter(h => S.ph[h.sym] && S.ph[h.sym].length > 1);
   if(!H.length){ box.hidden = true; return; }
   box.hidden = false;
   if(!H.some(h => h.sym === HC.sym)) HC.sym = H[0].sym;
-  $("hcTabs").innerHTML = H.length > 1 ? H.map(h => '<button type="button" role="tab" data-sym="' + esc(h.sym) + '" aria-selected="' + (h.sym === HC.sym) + '"' + (h.sym === HC.sym ? ' class="on"' : "") + ">" + esc(h.sym) + "</button>").join("") : '<span class="note">' + esc(H[0].sym) + "</span>";
+  $("hcTabs").innerHTML = H.length > 1 ? H.map(h => '<button type="button" role="tab" data-sym="' + esc(h.sym) + '" aria-selected="' + (h.sym === HC.sym) + '"' + (h.sym === HC.sym ? ' class="on"' : "") + ">" + esc(h.label) + "</button>").join("") : '<span class="note">' + esc(H[0].label) + "</span>";
   [...$("hcRng").children].forEach(b => b.classList.toggle("on", +b.getAttribute("data-r") === HC.r));
   const h = H.find(x => x.sym === HC.sym), all = S.ph[HC.sym];
-  const q = S.quotes.px[HC.sym];
+  const q = h.idx ? null : S.quotes.px[HC.sym];
   const pts = all.slice();
   if(q && q.d && q.p > 0 && (!pts.length || pts[pts.length - 1].time < q.d)) pts.push({ time: q.d, value: q.p });   // 接上今天的即時價
   const from = new Date(); from.setMonth(from.getMonth() - HC.r);
@@ -3195,7 +3198,8 @@ function renderHoldChart(){
   if(data.length < 2) data = pts.slice(-60);   // 這段期間資料太少，就顯示最近的資料
   const key = [HC.sym, HC.r, data.length, data.length ? data[data.length - 1].time + ":" + data[data.length - 1].value : "", h.cost, document.documentElement.getAttribute("data-theme") || ""].join("|");
   const first = data[0], last = data[data.length - 1];
-  $("hcNote").textContent = first && last ? HC.sym + "　" + first.time.slice(5).replace("-", "/") + " " + first.value + " → " + last.time.slice(5).replace("-", "/") + " " + last.value +
+  const fv = x => x >= 1000 ? x.toLocaleString("en-US", { maximumFractionDigits: 2 }) : x;
+  $("hcNote").textContent = first && last ? h.label + "　" + first.time.slice(5).replace("-", "/") + " " + fv(first.value) + " → " + last.time.slice(5).replace("-", "/") + " " + fv(last.value) +
     "（" + (last.value >= first.value ? "+" : "") + ((last.value / first.value - 1) * 100).toFixed(1) + "%）" + (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
   if(key === HC.key && HC.chart) return;
   HC.key = key;

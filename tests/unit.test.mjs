@@ -69,3 +69,15 @@ test("股息：股數以除息日前為準、2 萬以上扣二代健保、不重
   const again = planDividends({ ...DATA, divDone: { [r.add[0].id]: 1 } }, { "00919": divs }, "2026-11-24");
   assert.equal(again.add.length, 0);
 });
+
+test("加權指數歷史：依欄位名稱找收盤", async () => {
+  const { parseIndexRows } = await import("../update-quotes.mjs");
+  const d = { fields: ["日期", "開盤指數", "最高指數", "最低指數", "收盤指數"], data: [["115/11/03", "27,100.1", "27,300.5", "27,050.0", "27,250.33"], ["合計"]] };
+  assert.deepEqual(parseIndexRows(d), [["2026-11-03", 27250.33]]);
+  assert.deepEqual(parseIndexRows({ data: [["115/11/04", "1", "2", "3", "27,300"]] }), [["2026-11-04", 27300]]);
+});
+
+test("S&P 500（FRED 備援）：略過沒有數值的日子", async () => {
+  const { parseFred } = await import("../update-quotes.mjs");
+  assert.deepEqual(parseFred("observation_date,SP500\n2026-11-20,6910.39\n2026-11-21,.\n2026-11-23,7237.17\n"), [["2026-11-20", 6910.39], ["2026-11-23", 7237.17]]);
+});
