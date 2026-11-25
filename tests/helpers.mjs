@@ -11,6 +11,7 @@ const LIBS = [
 export async function openApp(page, { state, privacy = false, errors } = {}) {
   if (errors) page.on("pageerror", e => errors.push(e.message));
   await page.route(/gstatic\.com|googleapis\.com/, r => r.abort());
+  await page.route(/workers\.dev/, r => r.abort());   // 測試不連真的即時中繼站
   await page.route(/cdn\.jsdelivr\.net/, r => {
     const hit = LIBS.find(([re]) => re.test(r.request().url()));
     return hit ? r.fulfill({ contentType: "application/javascript", body: readFileSync(join(ROOT, hit[1])) }) : r.abort();

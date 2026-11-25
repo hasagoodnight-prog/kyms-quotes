@@ -3199,7 +3199,7 @@ function renderDivs(){
 }
 /* ===== 台股即時報價（透過你的 Cloudflare Worker 中繼，證交所不允許網頁直接讀取） =====
    網頁開著、台股交易時間內每 20 秒更新一次；只放在記憶體，不寫回雲端（收盤後由排程記錄） */
-const LIVE_URL = window.KYMS_LIVE_URL || "";   // 例：https://kyms-live.xxx.workers.dev
+const LIVE_URL = window.KYMS_LIVE_URL || "https://kyms-live.hasagoodnight.workers.dev/";   // 你的 Cloudflare Worker（worker/realtime.js）
 S.live = {};   // { "00919": { p, y, t, d }, TAIEX: {…} }
 let LIVE_T = 0, LIVE_AT = 0;
 function twNow(){ const d = new Date(Date.now() + 8 * 3600e3); return { wd: d.getUTCDay(), hm: d.getUTCHours() * 60 + d.getUTCMinutes() }; }
