@@ -439,6 +439,7 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hc-rng button.on{background:var(--gold-soft);color:var(--gold-ink);font-weight:600}
 .hc-chart{height:220px;position:relative}
 .hc-tv{height:360px;position:relative;border:1px solid var(--rule-soft);border-radius:4px;overflow:hidden}
+.hc-tvmsg{font-size:12.5px;color:var(--ink-2);margin:6px 0 0;padding:6px 9px;background:var(--panel-2);border-radius:4px}
 .hc-tvbtn{border:1px solid var(--rule);background:var(--panel);color:var(--ink-2);border-radius:4px;padding:3px 9px;font-size:12px;cursor:pointer}
 .hc-tvbtn[aria-pressed="true"]{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:600}
 .hc-stat{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;margin:2px 0 8px}
@@ -1240,6 +1241,7 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
             <div class="hc-stat" id="hcStat" aria-live="polite"></div>
             <div id="hcChart" class="hc-chart"></div>
             <div id="hcTvBox" class="hc-tv" hidden></div>
+            <div class="hc-tvmsg" id="hcTvMsg" hidden></div>
             <div class="hc-note" id="hcNote"></div>
           </div>
           <details class="quiet hadd-d"><summary>新增持股</summary>
@@ -3193,11 +3195,17 @@ function renderDivs(){
 /* TradingView 嵌入式即時圖：資料直接來自 TradingView（部分台股可能因授權不能嵌入顯示） */
 const TV_SYM = { TAIEX: "TWSE:IX0001", SPX: "SP:SPX" };
 const tvSym = sym => TV_SYM[sym] || "TWSE:" + sym;
+/* 台股（上市股票、ETF、加權指數）受授權限制不能嵌入，TradingView 會改顯示預設的 Apple；這些只給連結 */
+const tvEmbeddable = sym => sym === "SPX";
+const tvPage = sym => "https://www.tradingview.com/symbols/" + tvSym(sym).replace(":", "-") + "/";
 let TVK = "";
 try { HC.tv = localStorage.getItem("ledger-hc-tv") === "1"; } catch(e){}
 function renderTv(){
-  const box = $("hcTvBox"), on = !!HC.tv;
-  $("hcTv").setAttribute("aria-pressed", on);
+  const box = $("hcTvBox"), msg = $("hcTvMsg"), on = !!HC.tv && tvEmbeddable(HC.sym);
+  $("hcTv").setAttribute("aria-pressed", !!HC.tv);
+  msg.hidden = !(HC.tv && !tvEmbeddable(HC.sym));
+  if(!msg.hidden) msg.innerHTML = "TradingView 不開放台股嵌入其他網站，這裡改用原本的圖（盤中每 10 分鐘更新）。" +
+    '<a href="' + tvPage(HC.sym) + '" target="_blank" rel="noopener">到 TradingView 網站看即時 ↗</a>';
   box.hidden = !on;
   $("hcChart").hidden = on;
   $("hcRng").hidden = on;
@@ -3250,7 +3258,7 @@ function renderHoldChart(){
   $("hcNote").textContent = first && last ? h.label + "　" + first.time.slice(5).replace("-", "/") + " " + fv(first.value) + " → " + last.time.slice(5).replace("-", "/") + " " + fv(last.value) +
     (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
   renderTv();
-  if(HC.tv) return;   // TradingView 模式不用畫自己的圖
+  if(HC.tv && tvEmbeddable(HC.sym)) return;   // 用 TradingView 嵌入圖時不用畫自己的圖
   if(key === HC.key && HC.chart) return;
   HC.key = key;
   loadLWC().then(L => {

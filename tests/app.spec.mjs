@@ -120,7 +120,7 @@ test("離線時顯示「已存在這台裝置」，連線後同步", async ({ pa
   await expect(page.locator("#statusTxt")).toHaveText("已同步到雲端");
 });
 
-test("TradingView 即時模式：切換商品代號、可以切回自己的圖", async ({ page }) => {
+test("TradingView 即時模式：只有 S&P 500 嵌入，台股顯示原本的圖和連結", async ({ page }) => {
   await page.route(/tradingview\.com/, r => r.fulfill({ contentType: "application/javascript", body: "" }));   // 測試不連 TradingView
   const d = [], c = [];
   for (let i = 0; i < 30; i++) { d.push(new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10)); c.push(20 + i / 10); }
@@ -129,14 +129,15 @@ test("TradingView 即時模式：切換商品代號、可以切回自己的圖",
   await tab(page, "stats");
   const cfg = () => page.evaluate(() => { const s = document.querySelector("#hcTvBox script"); return s ? JSON.parse(s.textContent).symbol : null; });
   await page.click("#hcTv");
-  await expect(page.locator("#hcTvBox")).toBeVisible();
-  await expect(page.locator("#hcChart")).toBeHidden();
-  expect(await cfg()).toBe("TWSE:00919");
+  await expect(page.locator("#hcTvBox")).toBeHidden();
+  await expect(page.locator("#hcChart canvas").first()).toBeVisible({ timeout: 10000 });
+  await expect(page.locator("#hcTvMsg a")).toHaveAttribute("href", "https://www.tradingview.com/symbols/TWSE-00919/");
   await page.click('#hcTabs [data-sym="TAIEX"]');
-  expect(await cfg()).toBe("TWSE:IX0001");
+  await expect(page.locator("#hcTvMsg a")).toHaveAttribute("href", "https://www.tradingview.com/symbols/TWSE-IX0001/");
   await page.click('#hcTabs [data-sym="SPX"]');
+  await expect(page.locator("#hcTvBox")).toBeVisible();
+  await expect(page.locator("#hcTvMsg")).toBeHidden();
   expect(await cfg()).toBe("SP:SPX");
-  await expect(page.locator("#hcStat")).toContainText("當日");
   await page.click("#hcTv");
   await expect(page.locator("#hcTvBox")).toBeHidden();
   await expect(page.locator("#hcChart canvas").first()).toBeVisible({ timeout: 10000 });
