@@ -449,6 +449,10 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hc-stat .chg.dn{color:var(--good);background:color-mix(in srgb,var(--good) 12%,transparent)}
 .hc-stat .chg.flat{color:var(--ink-2);background:var(--panel-2)}
 .hc-stat .lbl{font-size:12.5px;color:var(--ink-3)}
+.hc-stat .live{font-size:12px;color:var(--bad);font-weight:600;display:inline-flex;align-items:center;gap:5px}
+.hc-stat .live::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--bad);animation:livePulse 1.6s ease-in-out infinite}
+@keyframes livePulse{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.hc-stat .live::before{animation:none}}
 .hc-stat .pair{display:inline-flex;align-items:baseline;gap:6px;white-space:nowrap}
 .hc-note{font-size:11.5px;color:var(--ink-3);margin-top:6px}
 .ar{margin:2px 0 12px;padding-bottom:10px;border-bottom:1px dashed var(--rule-soft)}
@@ -2625,6 +2629,7 @@ window.addEventListener("cloud-user-ready", async () => {
     healCats();
     renderStatus();
     if(cloudOn && !window.cloudSync.unwatch) window.cloudSync.unwatch = window.cloudSync.watch(onRemote);
+    pollLive();
   }catch(e){
     S.cloudErr = true;
     warn("雲端同步連不上，先繼續用這台裝置的紀錄，晚點再試。");
@@ -3192,6 +3197,39 @@ function renderDivs(){
   el.innerHTML = "<b>即將入帳的股息</b>" + L.map(v => '<div><span class="s">' + esc(v.sym) + '</span><span class="d">除息 ' + md(v.exd) + (v.pay ? "・" + md(v.pay) + " 入帳" : "・入帳日未公告") + "・每股 " + v.cps + '</span><span class="a pv">' + (PRIV ? "NT$ ••••" : "約 " + money(v.net)) + "</span></div>").join("") +
     '<div class="d" style="font-size:11.5px">入帳日到了會自動記成收入（扣二代健保後）。</div>';
 }
+/* ===== 台股即時報價（透過你的 Cloudflare Worker 中繼，證交所不允許網頁直接讀取） =====
+   網頁開著、台股交易時間內每 20 秒更新一次；只放在記憶體，不寫回雲端（收盤後由排程記錄） */
+const LIVE_URL = window.KYMS_LIVE_URL || "";   // 例：https://kyms-live.xxx.workers.dev
+S.live = {};   // { "00919": { p, y, t, d }, TAIEX: {…} }
+let LIVE_T = 0, LIVE_AT = 0;
+function twNow(){ const d = new Date(Date.now() + 8 * 3600e3); return { wd: d.getUTCDay(), hm: d.getUTCHours() * 60 + d.getUTCMinutes() }; }
+const marketOpen = () => { const n = twNow(); return n.wd >= 1 && n.wd <= 5 && n.hm >= 9 * 60 - 5 && n.hm <= 13 * 60 + 35; };
+const liveDate = d => /^\d{8}$/.test(d || "") ? d.slice(0, 4) + "-" + d.slice(4, 6) + "-" + d.slice(6) : "";
+function liveQuote(sym){
+  const v = S.live[sym];
+  if(!v || !(v.p > 0)) return null;
+  return { p: v.p, d: liveDate(v.d) || today(), src: "auto", chg: v.y ? Math.round((v.p - v.y) * 100) / 100 : 0, y: v.y, t: (v.t || "").slice(0, 5), live: 1 };
+}
+async function pollLive(){
+  clearTimeout(LIVE_T);
+  if(!LIVE_URL || !S.ready) return;
+  const syms = [...new Set((S.settings.hold || []).map(h => h.sym))].filter(s => /^[0-9A-Z]{1,8}$/.test(s));
+  syms.push("T00");
+  if(document.visibilityState === "visible"){
+    try{
+      const r = await fetch(LIVE_URL + "?s=" + encodeURIComponent(syms.join(",")), { cache: "no-store" });
+      if(r.ok){
+        const d = await r.json(), px = d.px || {};
+        const next = {};
+        for(const k in px) next[k === "T00" ? "TAIEX" : k] = px[k];
+        if(JSON.stringify(next) !== JSON.stringify(S.live)){ S.live = next; LIVE_AT = Date.now(); HKEY = ""; renderAll(); }
+      }
+    }catch(e){}
+  }
+  if(marketOpen()) LIVE_T = setTimeout(pollLive, 20000);
+}
+document.addEventListener("visibilitychange", () => { if(document.visibilityState === "visible" && LIVE_URL) pollLive(); });
+
 /* TradingView 嵌入式即時圖：資料直接來自 TradingView（部分台股可能因授權不能嵌入顯示） */
 const TV_SYM = { TAIEX: "TWSE:IX0001", SPX: "SP:SPX" };
 const tvSym = sym => TV_SYM[sym] || "TWSE:" + sym;
@@ -3235,9 +3273,12 @@ function renderHoldChart(){
   $("hcTabs").innerHTML = H.length > 1 ? H.map(h => '<button type="button" role="tab" data-sym="' + esc(h.sym) + '" aria-selected="' + (h.sym === HC.sym) + '"' + (h.sym === HC.sym ? ' class="on"' : "") + ">" + esc(h.label) + "</button>").join("") : '<span class="note">' + esc(H[0].label) + "</span>";
   [...$("hcRng").children].forEach(b => b.classList.toggle("on", +b.getAttribute("data-r") === HC.r));
   const h = H.find(x => x.sym === HC.sym), all = S.ph[HC.sym];
-  const q = h.idx ? null : S.quotes.px[HC.sym];
+  const lq = liveQuote(HC.sym), q = lq || (h.idx ? null : S.quotes.px[HC.sym]);
   const pts = all.slice();
-  if(q && q.d && q.p > 0 && (!pts.length || pts[pts.length - 1].time < q.d)) pts.push({ time: q.d, value: q.p });   // 接上今天的即時價
+  if(q && q.d && q.p > 0){   // 接上今天的即時價（同一天就換成最新的）
+    if(pts.length && pts[pts.length - 1].time === q.d) pts[pts.length - 1] = { time: q.d, value: q.p };
+    else if(!pts.length || pts[pts.length - 1].time < q.d) pts.push({ time: q.d, value: q.p });
+  }
   const from = new Date(); from.setMonth(from.getMonth() - HC.r);
   const since = from.getFullYear() + "-" + pad(from.getMonth() + 1) + "-" + pad(from.getDate());
   let data = pts.filter(p => p.time >= since);
@@ -3250,11 +3291,14 @@ function renderHoldChart(){
   const badge = (p, lbl) => '<span class="pair"><span class="chg ' + (p > 0.005 ? "up" : p < -0.005 ? "dn" : "flat") + '">' + (p > 0 ? "+" : p < 0 ? "−" : "") + Math.abs(p).toFixed(2) + "%</span><span class=\"lbl\">" + lbl + "</span></span>";
   const rngLbl = { 3: "近 3 個月", 6: "近 6 個月", 12: "近 1 年" }[HC.r] || "";
   /* 當日漲跌：最新一點和前一個交易日收盤比 */
-  const prev = pts.length > 1 ? pts[pts.length - 2] : null, lastP = pts[pts.length - 1];
+  let prev = pts.length > 1 ? pts[pts.length - 2] : null;
+  const lastP = pts[pts.length - 1];
+  if(lq && lq.y) prev = { time: "", value: lq.y };   // 即時：和證交所公布的昨收比
   const dayLbl = lastP && lastP.time === today() ? "今日" : lastP ? lastP.time.slice(5).replace("-", "/") + " 當日" : "";
   $("hcStat").innerHTML = first && last ? '<span class="v">' + fv(last.value) + "</span>" +
     (prev && lastP ? badge(pct(lastP.value, prev.value), dayLbl) : "") + badge(pct(last.value, first.value), rngLbl) +
-    (h.cost > 0 ? badge(pct(last.value, h.cost), "比成本") : "") : "";
+    (h.cost > 0 ? badge(pct(last.value, h.cost), "比成本") : "") +
+    (lq ? '<span class="live" title="每 20 秒更新">即時 ' + esc(lq.t) + "</span>" : "") : "";
   $("hcNote").textContent = first && last ? h.label + "　" + first.time.slice(5).replace("-", "/") + " " + fv(first.value) + " → " + last.time.slice(5).replace("-", "/") + " " + fv(last.value) +
     (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
   renderTv();
@@ -3376,7 +3420,7 @@ function holdStats(){
   const H = S.settings.hold || [];
   let cost = 0, mv = 0, priced = 0;
   const rows = H.map(h => {
-    const q = S.quotes.px[h.sym], c = h.sh * h.cost;
+    const q = liveQuote(h.sym) || S.quotes.px[h.sym], c = h.sh * h.cost;
     const r = { h, q, cost: c, mv: null, pl: null, pct: null };
     if(q && h.sh > 0){ r.mv = h.sh * q.p; r.pl = r.mv - c; r.pct = c > 0 ? r.pl / c * 100 : null; mv += r.mv; cost += c; priced++; }
     return r;

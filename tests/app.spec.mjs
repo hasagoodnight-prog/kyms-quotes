@@ -142,3 +142,22 @@ test("TradingView 即時模式：只有 S&P 500 嵌入，台股顯示原本的�
   await expect(page.locator("#hcTvBox")).toBeHidden();
   await expect(page.locator("#hcChart canvas").first()).toBeVisible({ timeout: 10000 });
 });
+
+test("即時報價：透過中繼站更新價格、當日漲跌和浮動盈虧", async ({ page }) => {
+  const ymd = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+  await page.addInitScript(() => { window.KYMS_LIVE_URL = "https://live.test/"; });
+  await page.route("https://live.test/**", r => r.fulfill({ contentType: "application/json", headers: { "access-control-allow-origin": "*" },
+    body: JSON.stringify({ at: Date.now(), px: { "00919": { p: 23, y: 20, t: "11:32:05", d: ymd.replace(/-/g, "") }, T00: { p: 40000, y: 40000, t: "11:32:00", d: ymd.replace(/-/g, "") } } }) }));
+  const d = [], c = [];
+  for (let i = 0; i < 30; i++) { d.push(new Date(Date.UTC(2026, 9, 1 + i)).toISOString().slice(0, 10)); c.push(20); }
+  await openApp(page, { state: { settings: { cats: cats(), hold: [{ sym: "00919", n: "", sh: 1000, cost: 19 }] }, months: {}, quotes: { px: {}, at: "" },
+    ph: { "00919": { d, c }, TAIEX: { d, c: c.map(() => 39000) } } } });
+  await tab(page, "stats");
+  await expect(page.locator("#hcStat .v")).toHaveText("23");
+  await expect(page.locator("#hcStat")).toContainText("+15.00%今日");
+  await expect(page.locator("#hcStat .live")).toContainText("即時 11:32");
+  await page.click('#hcTabs [data-sym="TAIEX"]');
+  await expect(page.locator("#hcStat .v")).toHaveText("40,000");
+  expect(await page.evaluate(() => Math.round(window.__t.S.live["00919"].p * 1000 - 19 * 1000))).toBe(4000);
+  await expect(page.locator("#hSum")).toContainText("4,000");
+});
