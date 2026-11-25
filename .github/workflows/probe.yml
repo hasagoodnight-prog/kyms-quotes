@@ -1,0 +1,9 @@
+name: probe
+on: { workflow_dispatch: {} }
+jobs:
+  p:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sS -m 20 -i -H "origin: https://hasagoodnight-prog.github.io" "https://kyms-live.hasagoodnight.workers.dev/?s=00919,T00" | sed -n '1p;/access-control-allow-origin/Ip;/content-type/Ip;$p'
+          echo; curl -sS -m 20 "https://kyms-live.hasagoodnight.workers.dev/?s=%3Cx%3E"
