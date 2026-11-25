@@ -6,11 +6,18 @@ on:
     - cron: "17 8 * * 1-5"
     # 備援：GitHub 排程常延遲或漏跑，18:47 再跑一次（重複執行不會出錯）
     - cron: "47 10 * * 1-5"
+    # 盤中即時：台灣時間 9:04–13:54 每 10 分鐘抓一次即時價（UTC 1–5 點）
+    - cron: "4-59/10 1-5 * * 1-5"
   workflow_dispatch: {}
 
 # 寫入權限只用在下面的 keepalive 空 commit
 permissions:
   contents: write
+
+# 同一時間只跑一個，前一個還沒跑完就排隊，不會互相覆蓋
+concurrency:
+  group: quotes
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -37,5 +44,5 @@ jobs:
       - run: node update-quotes.mjs
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          # 手動啟動抓即時價，排程抓收盤價
-          MODE: ${{ github.event_name == 'workflow_dispatch' && 'realtime' || 'close' }}
+          # 手動啟動和盤中排程抓即時價，收盤後的排程抓收盤價
+          MODE: ${{ (github.event_name == 'workflow_dispatch' || github.event.schedule == '4-59/10 1-5 * * 1-5') && 'realtime' || 'close' }}

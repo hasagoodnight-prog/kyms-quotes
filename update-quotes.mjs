@@ -362,7 +362,9 @@ async function main() {
     catch (e) { console.log("即時行情抓不到，改用收盤價：", e.message); }
   }
   // 加權指數：這個月的每日收盤（每次都抓）、手動啟動時再加上即時指數；完整一年歷史等帳號需要時才抓一次
-  const idxNow = mergeSeries(await fetchIndexMonth(addMonth(thisMk, -1)), await fetchIndexMonth(thisMk));
+  const idxPrev = await fetchIndexMonth(addMonth(thisMk, -1));
+  await sleep(600);   // 證交所短時間內連續請求會被擋
+  const idxNow = mergeSeries(idxPrev, await fetchIndexMonth(thisMk));
   const idxRt = realtime ? await fetchIndexRealtime() : null;
   let idxFull = null;
   console.log("加權指數：本月", idxNow.length, "天", idxRt ? "＋即時" : "");
