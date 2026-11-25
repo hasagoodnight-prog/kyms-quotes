@@ -438,6 +438,9 @@ details.group > summary:focus-visible{outline:2px solid var(--focus);outline-off
 .hc-rng button+button{border-left:1px solid var(--rule)}
 .hc-rng button.on{background:var(--gold-soft);color:var(--gold-ink);font-weight:600}
 .hc-chart{height:220px;position:relative}
+.hc-tv{height:360px;position:relative;border:1px solid var(--rule-soft);border-radius:4px;overflow:hidden}
+.hc-tvbtn{border:1px solid var(--rule);background:var(--panel);color:var(--ink-2);border-radius:4px;padding:3px 9px;font-size:12px;cursor:pointer}
+.hc-tvbtn[aria-pressed="true"]{border-color:var(--blue);background:var(--blue);color:#fff;font-weight:600}
 .hc-stat{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px;margin:2px 0 8px}
 .hc-stat .v{font-family:var(--mono);font-size:24px;font-weight:600;color:var(--ink);line-height:1.2;font-variant-numeric:tabular-nums}
 .hc-stat .chg{font-family:var(--mono);font-size:17px;font-weight:700;padding:2px 9px;border-radius:4px;font-variant-numeric:tabular-nums}
@@ -1232,9 +1235,11 @@ footer{margin-top:26px;border-top:1px solid var(--rule);padding-top:14px;color:v
           <div class="hdiv" id="hDiv" hidden></div>
           <div class="hchart" id="hcBox" hidden>
             <div class="hc-h"><b>走勢</b><div class="hc-tabs" id="hcTabs" role="tablist" aria-label="選擇持股"></div>
-              <div class="hc-rng" id="hcRng" role="group" aria-label="期間"><button type="button" data-r="3">3 個月</button><button type="button" data-r="6" class="on">6 個月</button><button type="button" data-r="12">1 年</button></div></div>
+              <div class="hc-rng" id="hcRng" role="group" aria-label="期間"><button type="button" data-r="3">3 個月</button><button type="button" data-r="6" class="on">6 個月</button><button type="button" data-r="12">1 年</button></div>
+              <button type="button" class="hc-tvbtn" id="hcTv" aria-pressed="false" title="改用 TradingView 網站的即時圖">TradingView 即時</button></div>
             <div class="hc-stat" id="hcStat" aria-live="polite"></div>
             <div id="hcChart" class="hc-chart"></div>
+            <div id="hcTvBox" class="hc-tv" hidden></div>
             <div class="hc-note" id="hcNote"></div>
           </div>
           <details class="quiet hadd-d"><summary>新增持股</summary>
@@ -3185,6 +3190,30 @@ function renderDivs(){
   el.innerHTML = "<b>即將入帳的股息</b>" + L.map(v => '<div><span class="s">' + esc(v.sym) + '</span><span class="d">除息 ' + md(v.exd) + (v.pay ? "・" + md(v.pay) + " 入帳" : "・入帳日未公告") + "・每股 " + v.cps + '</span><span class="a pv">' + (PRIV ? "NT$ ••••" : "約 " + money(v.net)) + "</span></div>").join("") +
     '<div class="d" style="font-size:11.5px">入帳日到了會自動記成收入（扣二代健保後）。</div>';
 }
+/* TradingView 嵌入式即時圖：資料直接來自 TradingView（部分台股可能因授權不能嵌入顯示） */
+const TV_SYM = { TAIEX: "TWSE:IX0001", SPX: "SP:SPX" };
+const tvSym = sym => TV_SYM[sym] || "TWSE:" + sym;
+let TVK = "";
+try { HC.tv = localStorage.getItem("ledger-hc-tv") === "1"; } catch(e){}
+function renderTv(){
+  const box = $("hcTvBox"), on = !!HC.tv;
+  $("hcTv").setAttribute("aria-pressed", on);
+  box.hidden = !on;
+  $("hcChart").hidden = on;
+  $("hcRng").hidden = on;
+  if(!on){ if(TVK){ box.innerHTML = ""; TVK = ""; } return; }
+  const dark = document.documentElement.getAttribute("data-theme") === "dark" || (!document.documentElement.getAttribute("data-theme") && matchMedia("(prefers-color-scheme: dark)").matches);
+  const k = tvSym(HC.sym) + "|" + dark;
+  if(k === TVK) return;
+  TVK = k;
+  box.innerHTML = '<div class="tradingview-widget-container" style="height:100%;width:100%"><div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div></div>';
+  const sc = document.createElement("script");
+  sc.src = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+  sc.async = true;
+  sc.textContent = JSON.stringify({ autosize: true, symbol: tvSym(HC.sym), interval: "D", timezone: "Asia/Taipei", theme: dark ? "dark" : "light", style: "1", locale: "zh_TW",
+    hide_side_toolbar: true, hide_top_toolbar: false, allow_symbol_change: false, save_image: false, calendar: false, support_host: "https://www.tradingview.com" });
+  box.firstChild.appendChild(sc);
+}
 function renderHoldChart(){
   const box = $("hcBox");
   if(!box) return;
@@ -3220,6 +3249,8 @@ function renderHoldChart(){
     (h.cost > 0 ? badge(pct(last.value, h.cost), "比成本") : "") : "";
   $("hcNote").textContent = first && last ? h.label + "　" + first.time.slice(5).replace("-", "/") + " " + fv(first.value) + " → " + last.time.slice(5).replace("-", "/") + " " + fv(last.value) +
     (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
+  renderTv();
+  if(HC.tv) return;   // TradingView 模式不用畫自己的圖
   if(key === HC.key && HC.chart) return;
   HC.key = key;
   loadLWC().then(L => {
@@ -3252,6 +3283,11 @@ function renderHoldChart(){
 }
 function bindHoldChart(){
   $("hcTabs").addEventListener("click", ev => { const b = ev.target.closest("button[data-sym]"); if(!b) return; HC.sym = b.getAttribute("data-sym"); renderHoldChart(); });
+  $("hcTv").addEventListener("click", () => {
+    HC.tv = !HC.tv; HC.key = "";
+    try { localStorage.setItem("ledger-hc-tv", HC.tv ? "1" : "0"); } catch(e){}
+    renderHoldChart();
+  });
   $("hcRng").addEventListener("click", ev => { const b = ev.target.closest("button[data-r]"); if(!b) return; HC.r = +b.getAttribute("data-r"); renderHoldChart(); });
 }
 
