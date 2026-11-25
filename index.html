@@ -3212,7 +3212,11 @@ function renderHoldChart(){
   const pct = (a, b) => (a / b - 1) * 100;
   const badge = (p, lbl) => '<span class="pair"><span class="chg ' + (p > 0.005 ? "up" : p < -0.005 ? "dn" : "flat") + '">' + (p > 0 ? "+" : p < 0 ? "−" : "") + Math.abs(p).toFixed(2) + "%</span><span class=\"lbl\">" + lbl + "</span></span>";
   const rngLbl = { 3: "近 3 個月", 6: "近 6 個月", 12: "近 1 年" }[HC.r] || "";
-  $("hcStat").innerHTML = first && last ? '<span class="v">' + fv(last.value) + "</span>" + badge(pct(last.value, first.value), rngLbl) +
+  /* 當日漲跌：最新一點和前一個交易日收盤比 */
+  const prev = pts.length > 1 ? pts[pts.length - 2] : null, lastP = pts[pts.length - 1];
+  const dayLbl = lastP && lastP.time === today() ? "今日" : lastP ? lastP.time.slice(5).replace("-", "/") + " 當日" : "";
+  $("hcStat").innerHTML = first && last ? '<span class="v">' + fv(last.value) + "</span>" +
+    (prev && lastP ? badge(pct(lastP.value, prev.value), dayLbl) : "") + badge(pct(last.value, first.value), rngLbl) +
     (h.cost > 0 ? badge(pct(last.value, h.cost), "比成本") : "") : "";
   $("hcNote").textContent = first && last ? h.label + "　" + first.time.slice(5).replace("-", "/") + " " + fv(first.value) + " → " + last.time.slice(5).replace("-", "/") + " " + fv(last.value) +
     (h.cost ? "・虛線是你的平均成本 " + h.cost : "") : "";
